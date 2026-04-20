@@ -1,5 +1,5 @@
-# PSNee V9.0
-PSNee is compatible with all retail PlayStation 1 models and various AVR microcontrollers.   
+# PSNEERP
+PSNEERP is compatible with all retail PlayStation 1 models and various AVR microcontrollers.   
 
 ## For all useful information, please consult the [Wiki](https://github.com/kalymos/PsNee/wiki).
 
@@ -17,11 +17,9 @@ PSNee is compatible with all retail PlayStation 1 models and various AVR microco
 >
 > See the Example of a distorted image at the bottom of the page.
 
-## Supported Hardware (AVR)
-- **ATmega328(A/P/PA)** @16MHz  
-- **ATmega168(A/P/PA)** @16MHz
-- **ATmega32U4** @16MHz
-- **ATtiny25/45/85** @8MHz *(No BIOS patch support!)*
+## Supported Hardware
+- **RP2040** 
+
 
 > [!CAUTION]
 > **SCPH-7000 NTSF J (BIOS Patch & Memory Cards):** 
