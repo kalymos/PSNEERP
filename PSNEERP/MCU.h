@@ -117,121 +117,55 @@
 
   void OptimizePeripherals(void) {
     
-    // Watchdog Timer Shutdown (Prevent Boot-Loop) 
-    MCUSR = 0;
-    WDTCSR |= (1 << WDCE) | (1 << WDE);
-    WDTCSR = 0x00;
-
-
-    // Disable Interrupts during setup
-    cli();
-
-    // Analog Modules Shutdown (Critical for Power)
-    ADCSRA = 0;             // Disable ADC
-    ACSR   |= (1 << ACD);   // Disable Analog Comparator
-
-    DIDR0 = 0xFF; // Pins A0 to A7
-    #if defined(__AVR_ATmega128PB__)
-      DIDR2 = 0xFF;
-    #endif
-
-    // GPIO Strategy (Unused pins to Pull-up)
-    // PORTx = 0xFF (Pull-ups) | DDRx = 0x00 (Inputs)
-    PORTC |= 0xFF;
-    #if defined(__AVR_ATmega328PB__) || defined(__AVR_ATmega128PB__)
-      PORTE |= 0x0F; // Le Port E existe sur la série PB (PE0 à PE3)
-    #endif
-    // Power Reduction Register (PRR)
-    // We KEEP PRUSART0 (UART) and shut down EVERYTHING else.
-    // _delay_ms() will still work (it's cycle-based, not timer-based).
-
-    #if defined(__AVR_ATmega328PB__)
-      PRR0  = (1 << PRTWI0) | // I2C Off
-              (1 << PRSPI0) | // SPI Off
-              (1 << PRTIM0) | // Timer 0 Off
-              (1 << PRTIM1) | // Timer 1 Off
-              (1 << PRTIM2) | // Timer 2 Off
-              (1 << PRADC);   // ADC Clock Off
-
-      PRR1  = (1 << PRTWI1) | // TWI 1 Off
-              (1 << PRSPI1) | // SPI 1 Off
-              (1 << PRTIM3) | // Timer 3 Off
-              (1 << PRTIM4);  // Timer 4 Off
-
-    #elif defined(__AVR_ATmega128PB__)
-      PRR0  = (1 << PRTWI0) | // I2C Off
-              (1 << PRSPI0) | // SPI Off
-              (1 << PRTIM0) | // Timer 0 Off
-              (1 << PRTIM1) | // Timer 1 Off
-              (1 << PRTIM2) | // Timer 2 Off
-              (1 << PRADC);   // ADC Clock Off
-
-      PRR1  = (1 << PRTWI1) | // TWI 1 Off
-              (1 << PRSPI1) | // SPI 1 Off
-              (1 << PRTIM3) | // Timer 3 Off
-              (1 << PRTIM4);  // Timer 4 Off
-
-      PRR2  = (1 << PRTIM5);  // Timer 5 Off 
-
-    #else
-      PRR   = (1 << PRTWI)  | // I2C Off
-              (1 << PRSPI)  | // SPI Off
-              (1 << PRTIM0) | // Timer 0 Off
-              (1 << PRTIM1) | // Timer 1 Off
-              (1 << PRTIM2) | // Timer 2 Off
-              (1 << PRADC);   // ADC Clock Off
-    #endif
-
-
-    // Double Security for Timer 0
-    TCCR0B = 0; TIMSK0 = 0; // Timer 0
-    TCCR1B = 0; TIMSK1 = 0; // Timer 1
-    TCCR2B = 0; TIMSK2 = 0; // Timer 2
-    #if defined(TCCR3B)
-      TCCR3B = 0; TIMSK3 = 0; // Timer 3 (série PB)
-      TCCR4B = 0; TIMSK4 = 0; // Timer 4 (série PB)
-    #endif
   }
 
-  #include <stdint.h>
-  #include <stdbool.h>
-  #include <avr/io.h>
-  #include <avr/interrupt.h>
-  #include <avr/sfr_defs.h>
-  #include <util/delay.h>
+#ifndef F_CPU
+#define F_CPU 133000000L  // RP2040 typically runs at 133MHz
+#endif
+
+#include <Arduino.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <Adafruit_NeoPixel.h>
 
 
+// Global interrupt control settings
+#define GLOBAL_INTERRUPT_ENABLE     interrupts()
+#define GLOBAL_INTERRUPT_DISABLE    noInterrupts()
 
-  // Main pin configuration
+// Define pin numbers for the RP2040 - adjust these to match your wiring
+#define PIN_DATA                    2    // GP2
+#define PIN_WFCK                    3    // GP3
+#define PIN_SQCK                    4    // GP4  
+#define PIN_SUBQ                    5    // GP5
 
-  // Define the main pins as inputs
-  #define PIN_DATA_INPUT DDRB &= ~(1 << DDB0)  // Set DDRB register to configure PINB0 as input
-  #define PIN_WFCK_INPUT DDRB &= ~(1 << DDB1)  // Set DDRB register to configure PINB1 as input
-  #define PIN_SQCK_INPUT DDRD &= ~(1 << DDD6)  // Set DDRD register to configure PINB6 as input
-  #define PIN_SUBQ_INPUT DDRD &= ~(1 << DDD7)  // Set DDRD register to configure PINB7 as input
+// Main pin configuration for input and output
+#define PIN_DATA_INPUT              pinMode(PIN_DATA, INPUT)
+#define PIN_WFCK_INPUT              pinMode(PIN_WFCK, INPUT)
+#define PIN_SQCK_INPUT              pinMode(PIN_SQCK, INPUT)
+#define PIN_SUBQ_INPUT              pinMode(PIN_SUBQ, INPUT)
+                            
+// Output configuration
+#define PIN_DATA_OUTPUT             pinMode(PIN_DATA, OUTPUT)
+#define PIN_WFCK_OUTPUT             pinMode(PIN_WFCK, OUTPUT)
+           
+// Setting pins high
+#define PIN_DATA_SET                digitalWrite(PIN_DATA, HIGH)
+             
+// Setting pins low
+#define PIN_DATA_CLEAR              digitalWrite(PIN_DATA, LOW)
+#define PIN_WFCK_CLEAR              digitalWrite(PIN_WFCK, LOW)
+                         
+// Reading pin states
+#define PIN_SQCK_READ               digitalRead(PIN_SQCK)
+#define PIN_SUBQ_READ               digitalRead(PIN_SUBQ)
+#define PIN_WFCK_READ               digitalRead(PIN_WFCK)
 
-  // Configure lines as outputs (for injection/override)
-  #define PIN_DATA_OUTPUT DDRB |= (1 << DDB0)  // Set DDRB register to configure PINB0 as output
-  #define PIN_WFCK_OUTPUT DDRB |= (1 << DDB1)  // Set DDRB register to configure PINB1 as output
+// Timer interrupt handling
+#define TIMER_INTERRUPT_ENABLE      // Handled in code via attachInterrupt
+#define TIMER_INTERRUPT_DISABLE     // Handled in code via detachInterrupt
+#define TIMER_TIFR_CLEAR            // Not applicable for RP2040
 
-  // Bus line state control (Set High / Clear Low)
-  #define PIN_DATA_SET PORTB |= (1 << PB0)  // Set PORTB register to make PINB0 high (enable pull-up))
-  #define PIN_DATA_CLEAR PORTB &= ~(1 << PB0)  // Set PORTB register to make PINB0 low
-  #define PIN_WFCK_CLEAR PORTB &= ~(1 << PB1)  // Set PORTB register to make PINB1 low
-
-  // Direct Register Reading (High-speed polling)
-  #define PIN_SQCK_READ (!!(PIND & (1 << PIND6)))  // Check if the value of PIND6 is high (1)
-  #define PIN_SUBQ_READ (!!(PIND & (1 << PIND7)))  // Check if the value of PIND7 is high (1)
-  #define PIN_WFCK_READ (!!(PINB & (1 << PINB1)))  // Check if the value of PINB1 is high (1)
-
-  // --- Status Indication (LED) ---
-  #ifdef LED_RUN
-    #define PIN_LED_OUTPUT DDRB |= (1 << DDB5)  // Configure PINB5 as output (for LED)
-    #define PIN_LED_ON    PORTB |= (1 << PB5)  // Set PINB5 high (turn on LED)
-    #define PIN_LED_OFF   PORTB &= ~(1 << PB5)  // Set PINB5 low (turn off LED)
-  #endif
-
-  // --- BIOS Patching Configuration ---
   #if defined(SCPH_102)       || \
       defined(SCPH_100)       || \
       defined(SCPH_7000_7500_9000) || \
@@ -240,55 +174,70 @@
       defined(SCPH_3000)      || \
       defined(SCPH_1000)
 
-    // Address (AX) and Data (DX) lines for BIOS override
-    #define PIN_DX_INPUT DDRD &= ~(1 << DDD4)
-    #define PIN_DX_OUTPUT DDRD |= (1 << DDD4)
-    #define PIN_DX_SET PORTD |= (1 << PD4)
-    #define PIN_DX_CLEAR PORTD &= ~(1 << PD4)
+      #define PIN_AX                      6    // GP6
+      #define PIN_DX                      8    // GP8
 
-    #define PIN_AX_INPUT DDRD &= ~(1 << DDD2)
-    #define WAIT_AX_RISING    (!(PIND & (1 << PIND2)))  // Wait for pulse start (Blocking until Rising Edge)
-    #define WAIT_AX_FALLING   (PIND & (1 << PIND2))     // Wait for pulse end (Blocking until Falling Edge)
-    #define PIN_AX_READ   (!!(PIND & (1 << PIND2))) 
 
-    // Hardware Interrupt (INT0) for AX pulse counting
-    #define PIN_AX_INTERRUPT_ENABLE     EIMSK  |=  (1<<INT0)      // Enable external interrupt on INT0 (PINB3)
-    #define PIN_AX_INTERRUPT_DISABLE    EIMSK  &= ~(1<<INT0)      // Disable external interrupt on INT0
-    #define PIN_AX_INTERRUPT_RISING     EICRA  |=  (1<<ISC01)|(1<<ISC00)                  // Configure INT0 for rising edge trigger
-    #define PIN_AX_INTERRUPT_VECTOR     INT0_vect               // Interrupt vector for INT0 (external interrupt)
-    #define PIN_AX_INTERRUPT_CLEAR      EIFR |= (1 << INTF0)  
+      // Define input pins for the BIOS patch
+      #define PIN_AX_INPUT                pinMode(PIN_AX, INPUT)
+      #define PIN_DX_INPUT                pinMode(PIN_DX, INPUT)
 
-    // Secondary Address line (AY) for multi-stage patching (INT1)
-    #if defined(SCPH_3000) || \
-        defined(SCPH_1000)
-      #define PIN_AY_INPUT       DDRD &= ~(1 << DDD3)  // Set DDRD register to configure PIND3 as input
-      #define WAIT_AY_RISING     (!(PIND & (1 << PIND3))) 
-      #define WAIT_AY_FALLING    (PIND & (1 << PIND3))
-      
-      #define PIN_AY_INTERRUPT_ENABLE     EIMSK  |=  (1<<INT1)      // Enable external interrupt on INT1 (PINB3)
-      #define PIN_AY_INTERRUPT_DISABLE    EIMSK  &= ~(1<<INT1)      // Disable external interrupt on INT1
-      #define PIN_AY_INTERRUPT_RISING     EICRA  |=  (1<<ISC11)|(1<<ISC10)                  // Configure INT1 for rising edge trigger
-      #define PIN_AY_INTERRUPT_FALLING    EICRA = (EICRA & ~((1 << ISC11) | (1 << ISC10))) | (1 << ISC11) // Configure INT1 for falling edge trigger
-      #define PIN_AY_INTERRUPT_VECTOR     INT1_vect              // Interrupt vector for INT1 (external interrupt)
-      #define PIN_AY_INTERRUPT_CLEAR    EIFR |= (1 << INTF1)
-    #endif
+      // Define output pins for the BIOS patch
+      #define PIN_DX_OUTPUT               pinMode(PIN_DX, OUTPUT)
 
-     // Hardware Bypass Switch (On-the-fly deactivation)
-    #ifdef PATCH_SWITCHE
-      #define PIN_SWITCH_INPUT DDRD &= ~(1 << DDD5)  // Configure PIND5 as input for switch
-      #define PIN_SWITCH_SET   PORTD |= (1 << PD5)     // Set PIND5 high (enable pull-up)
-      #define PIN_SWITCH_READ (!!(PIND & (1 << PIND5)))  // Read the state of PIND5 (switch input)
-    #endif
+      // Set pins high
+      #define PIN_DX_SET                  digitalWrite(PIN_DX, HIGH)
 
-  #endif
+      // Set pins low
+      #define PIN_DX_CLEAR                digitalWrite(PIN_DX, LOW)
 
-  // #if defined(DEBUG_SERIAL_MONITOR)
-  //   #define DEBUG_PRINT(x)     Serial.print(x)
-  //   #define DEBUG_PRINTHEX(x)  Serial.print(x, HEX)
-  //   #define DEBUG_PRINTLN(x)   Serial.println(x)
-  //   #define DEBUG_FLUSH        Serial.flush()
-  // #endif
+      // Read pins
+      #define PIN_AX_READ                 digitalRead(PIN_AX)
 
+      // External interrupt configuration - handled differently on RP2040
+      #define PIN_AX_INTERRUPT_ENABLE     // Handled in code via attachInterrupt
+      #define PIN_AX_INTERRUPT_DISABLE    // Handled in code via detachInterrupt
+
+      // Interrupt trigger modes
+      #define PIN_AX_INTERRUPT_RISING     // Handled in code via attachInterrupt(PIN_AX, ax_isr, RISING)
+      #define PIN_AX_INTERRUPT_FALLING    // Handled in code via attachInterrupt(PIN_AX, ax_isr, FALLING)
+
+      // Secondary Address line (AY) for multi-stage patching (INT1)
+      #define PIN_AX_INTERRUPT_VECTOR     // Not applicable for RP2040
+
+        #if defined(SCPH_3000) || \
+            defined(SCPH_1000)
+
+          #define PIN_AY                      7    // GP7
+          #define PIN_AY_INPUT                pinMode(PIN_AY, INPUT)
+          #define PIN_AY_READ                 digitalRead(PIN_AY)
+          #define PIN_AY_INTERRUPT_ENABLE     // Handled in code via attachInterrupt
+          #define PIN_AY_INTERRUPT_DISABLE    // Handled in code via detachInterrupt
+          #define PIN_AY_INTERRUPT_RISING     // Handled in code via attachInterrupt(PIN_AY, ay_isr, RISING)
+          #define PIN_AY_INTERRUPT_FALLING    // Handled in code via attachInterrupt(PIN_AY, ay_isr, FALLING)
+          #define PIN_AY_INTERRUPT_FALLING    // Handled in code via attachInterrupt(PIN_AY, ay_isr, FALLING)
+          #define PIN_AY_INTERRUPT_VECTOR     // Not applicable for RP2040
+        #endif  
+
+      // Hardware Bypass Switch (On-the-fly deactivation)
+      #ifdef PATCH_SWITCHE
+        #define PIN_SWITCH                  9    // GP9
+        #define PIN_SWITCH_INPUT            pinMode(PIN_SWITCH, INPUT_PULLUP)
+        #define PIN_SWITCH_SET              // Not applicable, using INPUT_PULLUP
+        #define PIN_SWITCH_READ             digitalRead(PIN_SWITCH)
+      #endif
+    #endif  
+// The RP2040 Zero uses a NeoPixel (WS2812B) as an onboard LED
+Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800); // Create a NeoPixel object
+
+// Arduino-style delay functions for RP2040
+#define _delay_us(us) delayMicroseconds(us)
+#define _delay_ms(ms) delay(ms)
+
+// Variables for tracking time in RP2040 implementation
+unsigned long timer_start_micros = 0;
+unsigned long timer_start_millis = 0;
+bool timer_running = false;
 #endif
 
 
