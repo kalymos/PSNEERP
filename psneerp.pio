@@ -1,0 +1,75 @@
+; =============================================================================
+; 1. CAPTURE SUBQ (Synchronisation sur SQCK pour lire SUBQ)
+; =============================================================================
+.program subq_capture
+; Pin 0 (IN) : SUBQ
+; Pin 1 (IN) : SQCK
+.wrap_target
+    wait 0 pin 1    ; Attend front descendant SQCK
+    wait 1 pin 1    ; Attend front montant SQCK
+    in pins, 1      ; Échantillonne SUBQ vers ISR
+.wrap
+
+; =============================================================================
+; 2. INJECTION SCEx (Modulation DATA basée sur WFCK)
+; =============================================================================
+.program scex_inject
+.side_set 1 opt     ; Pin DATA
+
+; Pin 0 (IN) : WFCK
+.wrap_target
+    out x, 1                ; Récupère 1 bit du FIFO CPU
+    jmp !x send_zero        ; Si bit == 0, branchement
+    
+    ; --- Mode bit 1 (Modulation) ---
+    set y, 29               ; 30 impulsions par bit
+bit1_loop:
+    wait 0 pin 0            ; Front descendant WFCK
+    nop side 0              ; DATA = 0
+    wait 1 pin 0            ; Front montant WFCK
+    nop side 1              ; DATA = 1
+    jmp y-- bit1_loop
+    jmp end_bit
+
+send_zero:
+    set y, 29
+bit0_loop:
+    wait 0 pin 0            ; Front descendant WFCK
+    nop side 0              ; DATA = 0
+    wait 1 pin 0            ; Front montant WFCK
+    nop side 0              ; DATA = 0
+    jmp y-- bit0_loop
+    
+end_bit:
+.wrap
+
+; =============================================================================
+; 3. BIOS PATCHING (Alignement AX/AY pour override DX)
+; =============================================================================
+.program bios_patch
+.side_set 1 opt ; Pin DX
+
+public start_patch:
+    pull block          
+    mov x, osr
+    pull block          
+    mov y, osr
+    pull block          
+    mov z, osr
+
+loop_pulses:
+    wait 1 pin 0        ; Observe la pin configurée comme 'in' (AX ou AY)
+    wait 0 pin 0
+    jmp x-- loop_pulses
+
+loop_offset:
+    jmp y-- loop_offset 
+
+    nop side 1          
+loop_override:
+    jmp z-- loop_override 
+    
+    nop side 0          
+    irq wait 0          ; 'wait' force le PIO à attendre que le CPU efface l'IRQ
+    jmp start_patch
+
