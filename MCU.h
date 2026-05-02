@@ -5,6 +5,38 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
+#include "ws2812.pio.h"
+
+
+#define PIN_NEOPIXEL 16
+
+// Couleurs préselectionnées (Format 0xGGRRBB00)
+
+#define LED_OFF       0x00000000
+
+#define LED_RED       0x00FF0000
+#define LED_GREEN     0xFF000000
+#define LED_BLUE      0x0000FF00
+
+// Couleurs secondaires
+#define LED_YELLOW    0xFFFF0000
+#define LED_CYAN      0xFF00FF00
+#define LED_MAGENTA   0x00FFFF00
+#define LED_WHITE     0xFFFFFF00
+
+// Couleurs d'état avancées
+#define LED_ORANGE    0x80FF0000 
+#define LED_PURPLE    0x00808000 
+#define LED_PINK      0x30FF6000 
+#define LED_AQUA      0xFF008000  
+      
+
+
+
+// Variable globale pour le PIO de la LED
+PIO pioLED = pio1; // Utilise le second bloc PIO pour ne pas gêner SUBQ/BIOS
+uint smLED = 0;
+
 
 // Define pin numbers for the RP2040 - adjust these to match your wiring
 #define PIN_DATA                    2    // GP2

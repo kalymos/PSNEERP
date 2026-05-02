@@ -73,3 +73,17 @@ loop_override:
     irq wait 0          ; 'wait' force le PIO à attendre que le CPU efface l'IRQ
     jmp start_patch
 
+; =============================================================================
+; 4. LED 
+; =============================================================================
+.program ws2812
+.side_set 1
+
+.wrap_target
+    out x, 1 side 0 [2] ; Récupère 1 bit, DATA bas
+    jmp !x do_zero side 1 [5] ; Si 0, saute. Si 1, DATA haut long
+    jmp  continue side 1 [2]
+do_zero:
+    nop side 0 [2] ; DATA bas pour le reste du cycle
+continue:
+.wrap
