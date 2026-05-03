@@ -29,7 +29,7 @@
  *                              // Data pin |                Adres pin            |
  *   SCPH model number          //          |    32-pin BIOS   |   40-pin BIOS    | BIOS version
  *-------------------------------------------------------------------------------------------------------------------*/
-// #define SCPH_102             // DX - D0  | AX - A7          |                  | 4.4e - CRC 0BAD7EA9, 4.5e -CRC 76B880E5
+ #define SCPH_102             // DX - D0  | AX - A7          |                  | 4.4e - CRC 0BAD7EA9, 4.5e -CRC 76B880E5
 // #define SCPH_100             // DX - D0  | AX - A7          |                  | 4.3j - CRC F2AF798B
 // #define SCPH_7000_7500_9000  // DX - D0  | AX - A7          |                  | 4.0j - CRC EC541CD0
 // #define SCPH_3500_5000_5500  // DX - D0  | AX - A16         | AX - A15         | 3.0j - CRC FF3EEB8C, 2.2j - CRC 24FC7E17, 2.1j - CRC BC190209 
@@ -122,7 +122,10 @@
 
 #include "MCU.h"
 #include "settings.h"
-#include "psneerp.pio"
+#include "psneerp.pio.h"
+
+#define REQUEST_INJECT_TRIGGER  10
+#define REQUEST_INJECT_GAP      5
 
 volatile int wfck_mode = 0;  //Flag initializing for automatic console generation selection 0 = old, 1 = pu-22 end  ++
 volatile uint32_t SUBQBuffer32[3]; // Global buffer to store the 12-byte SUBQ channel data
@@ -136,6 +139,50 @@ volatile uint32_t request_counter = 0;
 /*******************************************************************************************************************
  *                         Code section
  ********************************************************************************************************************/
+
+
+// Variable globale pour le PIO de la LED
+PIO pioLED = pio1; // Utilise le second bloc PIO pour ne pas gêner SUBQ/BIOS
+uint smLED = 0;
+
+void NeoPixel_Init() {
+    uint offset = pio_add_program(pioLED, &ws2812_program);
+    // Configuration 800kHz pour WS2812B
+    float div = clock_get_hz(clk_sys) / (800000 * 10); 
+    pio_sm_config c = ws2812_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&c, PIN_NEOPIXEL);
+    sm_config_set_out_shift(&c, false, true, 24); // Shift Left, Autopush 24 bits
+    pio_gpio_init(pioLED, PIN_NEOPIXEL);
+    pio_sm_init(pioLED, smLED, offset, &c);
+    pio_sm_set_enabled(pioLED, smLED, true);
+}
+
+void SetLED(uint32_t color) {
+    pio_sm_put_blocking(pioLED, smLED, color << 8);
+}
+
+void SetLEDDynamic(uint32_t color, uint8_t counter) {
+    if (counter == 0) {
+        pio_sm_put_blocking(pioLED, smLED, 0);
+        return;
+    }
+
+    // Protection : on plafonne le compteur à 20 pour éviter les calculs erronés
+    if (counter > 20) counter = 20;
+
+    // Calcul de l'intensité : 
+    // On utilise le compteur comme multiplicateur. 
+    // 20 * 12 ≈ 240 (proche du max 255)
+    uint8_t intensity = counter * 12;
+
+    uint32_t g = (((color >> 24) & 0xFF) * intensity) >> 8;
+    uint32_t r = (((color >> 16) & 0xFF) * intensity) >> 8;
+    uint32_t b = (((color >> 8) & 0xFF) * intensity) >> 8;
+
+    uint32_t final_color = (g << 24) | (r << 16) | (b << 8);
+    pio_sm_put_blocking(pioLED, smLED, final_color);
+}
+
 /****************************************************************************************
  * FUNCTION    : Bios_Patching()
  *
@@ -175,6 +222,9 @@ volatile uint32_t request_counter = 0;
 
 #ifdef BIOS_PATCH
 
+volatile uint8_t patch_stage = 0; // Pour suivre l'avancée du patch
+uint smPATCH = 0;                // Le numéro de la machine d'état pour le BIOS
+
 
 void on_pio_patch_irq() {
     if (pio_interrupt_get(pio0, 0)) {
@@ -213,10 +263,10 @@ void Bios_Patching(void) {
     }
 
     // --- PHASE 3 : INJECTION AX ---
-    PIN_LED_ON;
-    pio_sm_put_blocking(pio0, smSUBQ, PULSE_COUNT_PIO);
-    pio_sm_put_blocking(pio0, smSUBQ, BIT_OFFSET_VAL);
-    pio_sm_put_blocking(pio0, smSUBQ, OVERRIDE_VAL);
+
+    pio_sm_put_blocking(pio0, smPATCH, PULSE_COUNT_PIO);
+    pio_sm_put_blocking(pio0, smPATCH, BIT_OFFSET_VAL);
+    pio_sm_put_blocking(pio0, smPATCH, OVERRIDE_VAL);
 
     while (patch_stage < 1) tight_loop_contents();
 
@@ -237,10 +287,10 @@ void Bios_Patching(void) {
         }
 
         // --- PHASE 5 : INJECTION AY ---
-        PIN_LED_ON;
-        pio_sm_put_blocking(pio0, smSUBQ, PULSE_COUNT_2_PIO);
-        pio_sm_put_blocking(pio0, smSUBQ, BIT_OFFSET_2_VAL);
-        pio_sm_put_blocking(pio0, smSUBQ, OVERRIDE_2_VAL);
+
+        pio_sm_put_blocking(pio0, smPATCH, PULSE_COUNT_2_PIO);
+        pio_sm_put_blocking(pio0, smPATCH, BIT_OFFSET_2_VAL);
+        pio_sm_put_blocking(pio0, smPATCH, OVERRIDE_2_VAL);
 
         while (patch_stage < 2) tight_loop_contents();
     #endif
@@ -287,10 +337,10 @@ void BoardDetection() {
 
   while (--detectionWindow) {
     /**
-     * If WFCK is "CONTINUOUS" (Legacy), it stays HIGH. PIN_WFCK_READ will always be 1.
+     * If WFCK is "CONTINUOUS" (Legacy), it stays HIGH. gpio_get(PIN_WFCK) will always be 1.
      * If WFCK is "FREQUENCY" (Modern), it will hit 0 (LOW) periodically.
      */
-    if (!PIN_WFCK_READ) {  // Detect a LOW state (only possible in FREQUENCY mode)
+    if (!gpio_get(PIN_WFCK)) {  // Detect a LOW state (only possible in FREQUENCY mode)
       
       pulse_hits--;        // Record one oscillation hit
 
@@ -300,7 +350,7 @@ void BoardDetection() {
         #if defined(DEBUG_SERIAL_MONITOR)
           global_window = detectionWindow;
         #endif
-        PIN_WFCK_FLOAT;
+        gpio_disable_pulls(PIN_WFCK);
         return;            // Exit as soon as we are sure
       }
 
@@ -308,7 +358,7 @@ void BoardDetection() {
        * SYNC: Wait for the signal to go HIGH again.
        * This ensures we count each pulse of the "FREQUENCY" signal only once.
        */
-      while (!PIN_WFCK_READ && detectionWindow > 0) {
+      while (!gpio_get(PIN_WFCK) && detectionWindow > 0) {
         detectionWindow--;
         if(detectionWindow == 0) {
             SetLEDDynamic(LED_MAGENTA, 15);
@@ -317,7 +367,7 @@ void BoardDetection() {
       }
     }
   }
-  PIN_WFCK_FLOAT;
+  gpio_disable_pulls(PIN_WFCK);
   // If the window expires without seeing enough LOW pulses, it remains wfck_mode = 0 (GATE)
   #if defined(DEBUG_SERIAL_MONITOR)
     BoardDetectionLog(global_window, wfck_mode, injectSCEx);
@@ -393,39 +443,39 @@ void CaptureSUBQ(void) {
  * 
  * INPUT       : isDataSector (bool) - Filtered flag based on raw sector control bits.
  ******************************************************************************************/
-// #ifdef SCPH_5903
+#ifdef SCPH_5903
 
-//   void FilterSUBQSamples(uint8_t controlByte) {
+  void FilterSUBQSamples(uint8_t controlByte) {
       
-//       // --- STEP 0: Data/TOC Validation ---
-//       // Optimized mask (0xD0) to verify bit6 is SET while bit7 and bit4 are CLEARED.
-//       uint8_t isDataSector = ((controlByte & 0xD0) == 0x40);
+      // --- STEP 0: Data/TOC Validation ---
+      // Optimized mask (0xD0) to verify bit6 is SET while bit7 and bit4 are CLEARED.
+      uint8_t isDataSector = ((controlByte & 0xD0) == 0x40);
 
-//       // --- STEP 1: SUBQ Frame Synchronization ---
-//       // Fast filtering: ignore raw data if sync markers (index 1 and 6) are not 0x00.
-//       if (SUBQBuffer[1] == 0x00 && SUBQBuffer[6] == 0x00) {
+      // --- STEP 1: SUBQ Frame Synchronization ---
+      // Fast filtering: ignore raw data if sync markers (index 1 and 6) are not 0x00.
+      if (SUBQBuffer[1] == 0x00 && SUBQBuffer[6] == 0x00) {
 
-//           /** 
-//           * HIT INCREMENT CONDITIONS:
-//           * A. VALID PSX LEAD-IN: Data sector AND Point A0-A2 range AND NOT VCD (sub-mode != 0x02).
-//           *    (uint8_t)(SUBQBuffer[2] - 0xA0) <= 2 is an optimized check for 0xA0, 0xA1, 0xA2.
-//           * B. TRACKING MAINTENANCE: Keeps count if already synced and reading Mode 0x01 or Data.
-//           */
-//           if ( (isDataSector && (uint8_t)(SUBQBuffer[2] - 0xA0) <= 2 && SUBQBuffer[3] != 0x02) ||
-//               (request_counter > 0 && (SUBQBuffer[0] == 0x01 || isDataSector)) ) 
-//           {
-//               request_counter++; // Direct increment: faster on 16MHz AVR
-//               return;
-//           }
-//       }
+          /** 
+          * HIT INCREMENT CONDITIONS:
+          * A. VALID PSX LEAD-IN: Data sector AND Point A0-A2 range AND NOT VCD (sub-mode != 0x02).
+          *    (uint8_t)(SUBQBuffer[2] - 0xA0) <= 2 is an optimized check for 0xA0, 0xA1, 0xA2.
+          * B. TRACKING MAINTENANCE: Keeps count if already synced and reading Mode 0x01 or Data.
+          */
+          if ( (isDataSector && (uint8_t)(SUBQBuffer[2] - 0xA0) <= 2 && SUBQBuffer[3] != 0x02) ||
+              (request_counter > 0 && (SUBQBuffer[0] == 0x01 || isDataSector)) ) 
+          {
+              request_counter++; // Direct increment: faster on 16MHz AVR
+              return;
+          }
+      }
 
-//       // --- STEP 2: Signal Decay / Pattern Mismatch ---
-//       // Decrement the hit counter if no valid PSX pattern is detected in the SUBQ stream.
-//       if (request_counter > 0) {
-//           request_counter--; // Direct decrement: saves CPU cycles
-//       }
-//   }
-// #else
+      // --- STEP 2: Signal Decay / Pattern Mismatch ---
+      // Decrement the hit counter if no valid PSX pattern is detected in the SUBQ stream.
+      if (request_counter > 0) {
+          request_counter--; // Direct decrement: saves CPU cycles
+      }
+  }
+#else
 
 /******************************************************************************************
  * FUNCTION    : FilterSUBQSamples()
@@ -514,9 +564,6 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
       0x000002DAD5B24D99ULL  // SCEI
   };
 
-    #ifdef LED_RUN
-        PIN_LED_ON;
-    #endif
 
 
     
@@ -541,7 +588,7 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
         sleep_ms(90); // Délai inter-région pour mode universel
     }
 
-    PIN_DATA_FLOAT; // Libère le bus
+    gpio_disable_pulls(PIN_DATA); // Libère le bus
 
     #ifdef LED_RUN
         PIN_LED_OFF;
@@ -551,24 +598,36 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
 
 void Init() {
 
-  stdio_init_all();
+  
   NeoPixel_Init();
 
-  PIN_DATA_INIT;
-  PIN_WFCK_INIT;
-  PIN_SQCK_INIT;
-  PIN_SUBQ_INIT;
+// 2. Initialisation (Reset vers contrôleur SIO)
+    gpio_init(PIN_DATA);
+    gpio_init(PIN_WFCK);
+    gpio_init(PIN_SQCK);
+    gpio_init(PIN_SUBQ);
 
-  PIN_SUBQ_INPUT;
-  PIN_SQCK_INPUT;
-  PIN_WFCK_INPUT;
 
-  PIN_DATA_OUTPUT;
+    gpio_disable_pulls(PIN_DATA);
+    gpio_disable_pulls(PIN_WFCK);
+    gpio_disable_pulls(PIN_SQCK);
+    gpio_disable_pulls(PIN_SUBQ);
 
-  PIN_DATA_FLOAT;
-  PIN_WFCK_FLOAT;
-  PIN_SQCK_FLOAT;
-  PIN_SUBQ_FLOAT;
+
+    gpio_set_dir(PIN_WFCK, GPIO_IN);
+    gpio_set_dir(PIN_SQCK, GPIO_IN);
+    gpio_set_dir(PIN_SUBQ, GPIO_IN);
+    
+    #ifdef BIOS_PATCH
+        gpio_init(PIN_AX);
+        gpio_init(PIN_AY);
+        gpio_init(PIN_DX);
+        gpio_disable_pulls(PIN_AX);
+        gpio_disable_pulls(PIN_AY);
+        gpio_disable_pulls(PIN_DX);
+    #endif
+
+
 
       // Chargement du programme
     offsetSUBQ = pio_add_program(pioSUBQ, &subq_capture_program);
@@ -578,30 +637,22 @@ void Init() {
     
 
 
+}
+
+int main() {
+    stdio_init_all();
+    Init();
 
    // --- Critical Boot Patching ---
    #ifdef BIOS_PATCH
 
-
   // Execute BIOS patching 
    Bios_Patching();
+   #endif
 
-
-
-  // Identify board revision (PU-7 to PU-22+) to set correct injection timings
+    // Identify board revision (PU-7 to PU-22+) to set correct injection timings
   BoardDetection();
-}
-
-int main() {
-
-  Init();
   
-  #if defined(BIOS_PATCH)
-  Bios_Patching();
-  #endif
-
-  // Identify board revision (PU-7 to PU-22+) to set correct injection timings
-  BoardDetection();
 
   #if defined(DEBUG_SERIAL_MONITOR)
     // Display initial board detection results (Window remaining & WFCK mode)
@@ -610,7 +661,7 @@ int main() {
 
   while (true) {
 
-    _delay_ms(1);        // Timing Sync: Prevent reading the tail end of the previous SUBQ packet
+    sleep_ms(1);        // Timing Sync: Prevent reading the tail end of the previous SUBQ packet
     
     CaptureSUBQ();       // DATA ACQUISITION: Capture the 12-byte SUBQ stream.
 
@@ -620,7 +671,7 @@ int main() {
      * La mise à jour de la LED (LED_GREEN) est gérée à l'intérieur
      * de FilterSUBQSamples en fonction du request_counter.
      */
-    FilterSUBQSamples()
+    FilterSUBQSamples();
 
     /** 
      * INJECTION TRIGGER: Once enough valid requests are detected, 
@@ -642,45 +693,3 @@ int main() {
 
 
 
-
-// Variable globale pour le PIO de la LED
-PIO pioLED = pio1; // Utilise le second bloc PIO pour ne pas gêner SUBQ/BIOS
-uint smLED = 0;
-
-void NeoPixel_Init() {
-    uint offset = pio_add_program(pioLED, &ws2812_program);
-    // Configuration 800kHz pour WS2812B
-    float div = clock_get_hz(clk_sys) / (800000 * 10); 
-    pio_sm_config c = ws2812_program_get_default_config(offset);
-    sm_config_set_sideset_pins(&c, PIN_NEOPIXEL);
-    sm_config_set_out_shift(&c, false, true, 24); // Shift Left, Autopush 24 bits
-    pio_gpio_init(pioLED, PIN_NEOPIXEL);
-    pio_sm_init(pioLED, smLED, offset, &c);
-    pio_sm_set_enabled(pioLED, smLED, true);
-}
-
-void SetLED(uint32_t color) {
-    pio_sm_put_blocking(pioLED, smLED, color << 8);
-}
-
-void SetLEDDynamic(uint32_t color, uint8_t counter) {
-    if (counter == 0) {
-        pio_sm_put_blocking(pioLED, smLED, 0);
-        return;
-    }
-
-    // Protection : on plafonne le compteur à 20 pour éviter les calculs erronés
-    if (counter > 20) counter = 20;
-
-    // Calcul de l'intensité : 
-    // On utilise le compteur comme multiplicateur. 
-    // 20 * 12 ≈ 240 (proche du max 255)
-    uint8_t intensity = counter * 12;
-
-    uint32_t g = (((color >> 24) & 0xFF) * intensity) >> 8;
-    uint32_t r = (((color >> 16) & 0xFF) * intensity) >> 8;
-    uint32_t b = (((color >> 8) & 0xFF) * intensity) >> 8;
-
-    uint32_t final_color = (g << 24) | (r << 16) | (b << 8);
-    pio_sm_put_blocking(pioLED, smLED, final_color);
-}

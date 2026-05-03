@@ -1,4 +1,4 @@
-//#pragma once
+#pragma once
 
 /*
  *
@@ -14,63 +14,63 @@
   // ------ SCPH 100 / 102 ------
   #if defined(SCPH_100) || \
       defined(SCPH_102)
-    #define BIOS_PATCH
-    #define SILENCE_THRESHOLD      15000
-    #define CONFIRM_COUNTER_TARGET 8
-    #define PULSE_COUNT_PIO        47 
-    #define BIT_OFFSET_VAL         187 
-    #define OVERRIDE_VAL           11       
+      #define BIOS_PATCH
+      #define SILENCE_THRESHOLD      15000
+      #define CONFIRM_COUNTER_TARGET 8
+      #define PULSE_COUNT_PIO        47 
+      #define BIT_OFFSET_VAL         187 
+      #define OVERRIDE_VAL           11       
   #endif
 
   // -------- SCPH 7000 / 7500 / 9000 --------
   #ifdef SCPH_7000_7500_9000
     #define BIOS_PATCH
-  #define SILENCE_THRESHOLD        15000
-  #define CONFIRM_COUNTER_TARGET   1
-  #define PULSE_COUNT_PIO          14    // (15 - 1)
-  #define BIT_OFFSET_VAL           187   // (47 * 4) - 1
-  #define OVERRIDE_VAL             11    // (3 * 4) - 1     
+    #define SILENCE_THRESHOLD        15000
+    #define CONFIRM_COUNTER_TARGET   1
+    #define PULSE_COUNT_PIO          14    // (15 - 1)
+    #define BIT_OFFSET_VAL           187   // (47 * 4) - 1
+    #define OVERRIDE_VAL             11    // (3 * 4) - 1     
   #endif
 
   // ----- SCPH 3500 / 5000 / 5500 -----
   #ifdef SCPH_3500_5000_5500
     #define BIOS_PATCH
-  #define SILENCE_THRESHOLD        320000 // (32000 * 10)
-  #define CONFIRM_COUNTER_TARGET   1
-  #define PULSE_COUNT_PIO          83     // (84 - 1)
-  #define BIT_OFFSET_VAL           187    // (47 * 4) - 1
-  #define OVERRIDE_VAL             11     // (3 * 4) - 1
+    #define SILENCE_THRESHOLD        320000 // (32000 * 10)
+    #define CONFIRM_COUNTER_TARGET   1
+    #define PULSE_COUNT_PIO          83     // (84 - 1)
+    #define BIT_OFFSET_VAL           187    // (47 * 4) - 1
+    #define OVERRIDE_VAL             11     // (3 * 4) - 1
   #endif
 
   // -------- SCPH 3000 --------
   #ifdef SCPH_3000
     #define BIOS_PATCH
-  #define PHASE_TWO_PATCH
-  #define SILENCE_THRESHOLD        15000
-  #define CONFIRM_COUNTER_TARGET   9
-  #define PULSE_COUNT_PIO          58     // (59 - 1)
-  #define BIT_OFFSET_VAL           179    // (45 * 4) - 1
-  #define OVERRIDE_VAL             11     // (3 * 4) - 1
-  #define CONFIRM_COUNTER_TARGET_2 206 
-  #define PULSE_COUNT_2_PIO        41     // (42 - 1)
-  #define BIT_OFFSET_2_VAL         191    // (48 * 4) - 1
-  #define OVERRIDE_2_VAL           11     // (3 * 4) - 1
+    #define PHASE_TWO_PATCH
+    #define SILENCE_THRESHOLD        15000
+    #define CONFIRM_COUNTER_TARGET   9
+    #define PULSE_COUNT_PIO          58     // (59 - 1)
+    #define BIT_OFFSET_VAL           179    // (45 * 4) - 1
+    #define OVERRIDE_VAL             11     // (3 * 4) - 1
+    #define CONFIRM_COUNTER_TARGET_2 206 
+    #define PULSE_COUNT_2_PIO        41     // (42 - 1)
+    #define BIT_OFFSET_2_VAL         191    // (48 * 4) - 1
+    #define OVERRIDE_2_VAL           11     // (3 * 4) - 1
   #endif
 
 
   // -------- SCPH 1000 --------
   #ifdef SCPH_1000
-  #define BIOS_PATCH
-  #define PHASE_TWO_PATCH
-  #define SILENCE_THRESHOLD        15000
-  #define CONFIRM_COUNTER_TARGET   9
-  #define PULSE_COUNT_PIO          90     // (91 - 1)
-  #define BIT_OFFSET_VAL           179    // (45 * 4) - 1
-  #define OVERRIDE_VAL             11     // (3 * 4) - 1
-  #define CONFIRM_COUNTER_TARGET_2 222   
-  #define PULSE_COUNT_2_PIO        69     // (70 - 1)
-  #define BIT_OFFSET_2_VAL         191    // (48 * 4) - 1
-  #define OVERRIDE_2_VAL           11     // (3 * 4) - 1
+    #define BIOS_PATCH
+    #define PHASE_TWO_PATCH
+    #define SILENCE_THRESHOLD        15000
+    #define CONFIRM_COUNTER_TARGET   9
+    #define PULSE_COUNT_PIO          90
+    #define BIT_OFFSET_VAL           179
+    #define OVERRIDE_VAL             11
+    #define CONFIRM_COUNTER_TARGET_2 222   
+    #define PULSE_COUNT_2_PIO        69
+    #define BIT_OFFSET_2_VAL         191
+    #define OVERRIDE_2_VAL           11
   #endif
 
 
@@ -163,7 +163,6 @@ void InjectLog() {
 
 #endif
 
-#endif
 
 // /*------------------------------------------------------------------------------------------------
 //                Compilation message

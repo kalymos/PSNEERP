@@ -40,13 +40,20 @@ add_executable(PSNEERP PSNEERP.c )
 pico_set_program_name(PSNEERP "PSNEERP")
 pico_set_program_version(PSNEERP "0.1")
 
+pico_generate_pio_header(PSNEERP ${CMAKE_CURRENT_LIST_DIR}/psneerp.pio)
+target_include_directories(PSNEERP PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(PSNEERP 0)
 pico_enable_stdio_usb(PSNEERP 1)
 
 # Add the standard library to the build
-target_link_libraries(PSNEERP
-        pico_stdlib)
+target_link_libraries(PSNEERP 
+    pico_stdlib 
+    pico_multicore
+    hardware_pio      # <--- AJOUTE ÇA (pour hardware/pio.h)
+    hardware_clocks   # <--- AJOUTE ÇA (pour clock_get_hz)
+)
 
 # Add the standard include files to the build
 target_include_directories(PSNEERP PRIVATE

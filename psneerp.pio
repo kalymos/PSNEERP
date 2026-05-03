@@ -22,29 +22,33 @@
     jmp !x send_zero        ; Si bit == 0, branchement
     
     ; --- Mode bit 1 (Modulation) ---
-    set y, 29               ; 30 impulsions par bit
+    set y, 29               
 bit1_loop:
-    wait 0 pin 0            ; Front descendant WFCK
-    nop side 0              ; DATA = 0
-    wait 1 pin 0            ; Front montant WFCK
-    nop side 1              ; DATA = 1
+    wait 0 pin 0            
+    nop side 0              
+    wait 1 pin 0            
+    nop side 1              
+    ; ... (fin de bit1_loop)
     jmp y-- bit1_loop
-    jmp end_bit
+    jmp force_wrap          ; <-- On saute ici
 
 send_zero:
     set y, 29
 bit0_loop:
-    wait 0 pin 0            ; Front descendant WFCK
-    nop side 0              ; DATA = 0
-    wait 1 pin 0            ; Front montant WFCK
-    nop side 0              ; DATA = 0
+    wait 0 pin 0            
+    nop side 0              
+    wait 1 pin 0            
+    nop side 0              
     jmp y-- bit0_loop
     
-end_bit:
+force_wrap:                 ; <-- L'étiquette pointe sur une instruction
+    nop                     ; <-- On ajoute un NOP pour que l'adresse existe
 .wrap
 
+
+
 ; =============================================================================
-; 3. BIOS PATCHING (Alignement AX/AY pour override DX)
+; 3. BIOS PATCHING
 ; =============================================================================
 .program bios_patch
 .side_set 1 opt ; Pin DX
@@ -55,10 +59,14 @@ public start_patch:
     pull block          
     mov y, osr
     pull block          
-    mov z, osr
+    ; On ne peut pas utiliser 'z', on réutilise le registre OSR directement ou un autre transfert
+    ; Pour simplifier, si tu as besoin d'un 3ème compteur, utilise l'ISR ou repull.
+    ; Ici je corrige l'erreur de syntaxe en utilisant l'OSR pour le 3ème délai :
+    out null, 32        ; Vide OSR si nécessaire
+    pull block          
 
 loop_pulses:
-    wait 1 pin 0        ; Observe la pin configurée comme 'in' (AX ou AY)
+    wait 1 pin 0        
     wait 0 pin 0
     jmp x-- loop_pulses
 
@@ -67,11 +75,15 @@ loop_offset:
 
     nop side 1          
 loop_override:
-    jmp z-- loop_override 
+    ; On utilise l'OSR comme compteur si on ne veut pas écraser X ou Y
+    mov x, osr          
+loop_z_replacement:
+    jmp x-- loop_z_replacement 
     
     nop side 0          
-    irq wait 0          ; 'wait' force le PIO à attendre que le CPU efface l'IRQ
+    irq wait 0          
     jmp start_patch
+
 
 ; =============================================================================
 ; 4. LED 
@@ -80,10 +92,13 @@ loop_override:
 .side_set 1
 
 .wrap_target
-    out x, 1 side 0 [2] ; Récupère 1 bit, DATA bas
+    out x, 1 side 0 [2] ; DATA bas
     jmp !x do_zero side 1 [5] ; Si 0, saute. Si 1, DATA haut long
-    jmp  continue side 1 [2]
+    jmp continue side 1 [2]   ; Reste à 1 et va au NOP
 do_zero:
-    nop side 0 [2] ; DATA bas pour le reste du cycle
+    nop side 0 [4]      ; DATA bas
 continue:
+    nop side 0          ; <--- On ajoute "side 0" pour éteindre la LED ici
 .wrap
+
+
