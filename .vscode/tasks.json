@@ -3,23 +3,21 @@
     "tasks": [
         {
             "label": "Compile Project",
-            "type": "process",
-            "isBuildCommand": true,
-            "command": "${userHome}/.pico-sdk/ninja/v1.12.1/ninja",
-            "args": [
-                "-C",
-                "${workspaceFolder}/build"
-            ],
-            "group": "build",
+            "type": "shell",
+            "command": "echo '\u001b[1;36m >>> PLAYSTATION SYSTEM NEE EXTENDED EXPERIENCE RECURSIVE PROJECT <<<\u001b[0m' && cd ${workspaceFolder} && touch settings.h && /home/nic/.pico-sdk/ninja/v1.12.1/ninja -C build 2>&1 | tee /tmp/pico.log | sed -E -n 's/.*#pragma message: (.*)/  \u001b[1;34m»\u001b[0m \u001b[1;32m\\1\u001b[0m/p; s/.*#error (.*)/  \u001b[1;31m✘ [ERREUR]\u001b[0m \\1/p; /error:|Building|Linking/p' | sed -E 's/STRING\\(LED_PIN\\)/16/g; s/STRING\\(REQUEST_INJECT_TRIGGER\\)/10/g; s/STRING\\(REQUEST_INJECT_GAP\\)/5/g; s/[\"'\\''\\)]//g' && if [ ${PIPESTATUS[0]} -eq 0 ]; then echo -e '\n\u001b[1;32m[SUCCESS] Build finished!\u001b[0m'; else echo -e '\n\u001b[1;41m  BUILD FAILED  \u001b[0m'; fi",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
             "presentation": {
                 "reveal": "always",
-                "panel": "dedicated"
+                "panel": "dedicated",
+                "clear": true,
+                "echo": false
             },
-            "problemMatcher": "$gcc",
-            "windows": {
-                "command": "${env:USERPROFILE}/.pico-sdk/ninja/v1.12.1/ninja.exe"
-            }
-        },
+            "problemMatcher": "$gcc"
+        }
+,
         {
             "label": "Run Project",
             "type": "process",

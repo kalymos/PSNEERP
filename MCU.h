@@ -35,6 +35,8 @@
 #define PIN_SQCK                    4    // GP4  
 #define PIN_SUBQ                    5    // GP5
 
+#define PIN_DEBUG_TX 10
+
   #if defined(SCPH_102)       || \
       defined(SCPH_100)       || \
       defined(SCPH_7000_7500_9000) || \

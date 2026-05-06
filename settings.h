@@ -17,9 +17,9 @@
       #define BIOS_PATCH
       #define SILENCE_THRESHOLD      15000
       #define CONFIRM_COUNTER_TARGET 8
-      #define PULSE_COUNT_PIO        47 
-      #define BIT_OFFSET_VAL         187 
-      #define OVERRIDE_VAL           11       
+      #define PULSE_COUNT            47 
+      #define BIT_OFFSET             187 
+      #define OVERRIDE               11       
   #endif
 
   // -------- SCPH 7000 / 7500 / 9000 --------
@@ -27,9 +27,9 @@
     #define BIOS_PATCH
     #define SILENCE_THRESHOLD        15000
     #define CONFIRM_COUNTER_TARGET   1
-    #define PULSE_COUNT_PIO          14    // (15 - 1)
-    #define BIT_OFFSET_VAL           187   // (47 * 4) - 1
-    #define OVERRIDE_VAL             11    // (3 * 4) - 1     
+    #define PULSE_COUNT              14    // (15 - 1)
+    #define BIT_OFFSET               187   // (47 * 4) - 1
+    #define OVERRIDE                 11    // (3 * 4) - 1     
   #endif
 
   // ----- SCPH 3500 / 5000 / 5500 -----
@@ -37,9 +37,9 @@
     #define BIOS_PATCH
     #define SILENCE_THRESHOLD        320000 // (32000 * 10)
     #define CONFIRM_COUNTER_TARGET   1
-    #define PULSE_COUNT_PIO          83     // (84 - 1)
-    #define BIT_OFFSET_VAL           187    // (47 * 4) - 1
-    #define OVERRIDE_VAL             11     // (3 * 4) - 1
+    #define PULSE_COUNT              83     // (84 - 1)
+    #define BIT_OFFSET               187    // (47 * 4) - 1
+    #define OVERRIDE                 11     // (3 * 4) - 1
   #endif
 
   // -------- SCPH 3000 --------
@@ -48,13 +48,13 @@
     #define PHASE_TWO_PATCH
     #define SILENCE_THRESHOLD        15000
     #define CONFIRM_COUNTER_TARGET   9
-    #define PULSE_COUNT_PIO          58     // (59 - 1)
-    #define BIT_OFFSET_VAL           179    // (45 * 4) - 1
-    #define OVERRIDE_VAL             11     // (3 * 4) - 1
+    #define PULSE_COUNT              58     // (59 - 1)
+    #define BIT_OFFSET               179    // (45 * 4) - 1
+    #define OVERRIDE                 11     // (3 * 4) - 1
     #define CONFIRM_COUNTER_TARGET_2 206 
-    #define PULSE_COUNT_2_PIO        41     // (42 - 1)
-    #define BIT_OFFSET_2_VAL         191    // (48 * 4) - 1
-    #define OVERRIDE_2_VAL           11     // (3 * 4) - 1
+    #define PULSE_COUNT_2            41     // (42 - 1)
+    #define BIT_OFFSET_2             191    // (48 * 4) - 1
+    #define OVERRIDE_2               11     // (3 * 4) - 1
   #endif
 
 
@@ -64,13 +64,13 @@
     #define PHASE_TWO_PATCH
     #define SILENCE_THRESHOLD        15000
     #define CONFIRM_COUNTER_TARGET   9
-    #define PULSE_COUNT_PIO          90
-    #define BIT_OFFSET_VAL           179
-    #define OVERRIDE_VAL             11
+    #define PULSE_COUNT              90
+    #define BIT_OFFSET               179
+    #define OVERRIDE                 11
     #define CONFIRM_COUNTER_TARGET_2 222   
-    #define PULSE_COUNT_2_PIO        69
-    #define BIT_OFFSET_2_VAL         191
-    #define OVERRIDE_2_VAL           11
+    #define PULSE_COUNT_2            69
+    #define BIT_OFFSET_2             191
+    #define OVERRIDE_2               11
   #endif
 
 
@@ -168,9 +168,53 @@
 // -----------------------------------------------------------------------------------------------*/
 
 
-#ifdef LED_RUN
-  #pragma message "Feature: Status LED ENABLED"
+// --- Feature Status ---
+#define STRING2(x) #x
+#define STRING(x) STRING2(x)
+
+#pragma message("Led pin: " STRING(LED_PIN))
+#pragma message("Inject Trigger: " STRING(REQUEST_INJECT_TRIGGER))
+#pragma message("Inject Gap: " STRING(REQUEST_INJECT_GAP))
+
+
+#ifdef DEBUG_SERIAL_MONITOR
+  #pragma message "Feature: Serial Debug Monitor ENABLED"
 #endif
+
+#ifdef PATCH_SWITCHE
+  #pragma message "PATCH_SWITCHE selected"
+#endif
+
+
+// Show target console.
+#if defined(SCPH_1000)
+  #pragma message "SCPH_1000 NTSC-J"
+#elif defined(SCPH_3000)
+  #pragma message "SCPH_3000 NTSC-J"
+#elif defined(SCPH_3500_5000_5500)
+  #pragma message "SCPH_3500_5000_5500 NTSC-J"
+#elif defined(SCPH_7000_7500_9000)
+  #pragma message "SCPH_7000_7500_9000 NTSC-J"
+#elif defined(SCPH_100)
+  #pragma message "SCPH_100 NTSC-J"
+#elif defined(SCPH_102)
+  #pragma message "SCPH_102 PAL"
+#elif defined(SCPH_xxx1)
+  #pragma message "SCPH_xxx1 Generic NTSC-U/C"
+#elif defined(SCPH_xxx2)
+  #pragma message "SCPH_xxx2 Generic PAL"
+#elif defined(SCPH_xxx3)
+  #pragma message "SCPH_xxx3 Generic NTSC-J"
+#elif defined(SCPH_5903)
+  #pragma message "SCPH-5903 Video CD Dual-Interface"
+#elif defined(SCPH_xxxx)
+  #pragma message "SCPH_xxxx Universal Region Mode"
+#else
+  // Error if no console is uncommented
+  #error "Console not selected! Please uncomment one SCPH model."
+#endif
+
+
 
 // SECURITY CHECK: Ensure only one console is selected
 // If you get "not portable" warnings here, it's only because multiple models are active.
@@ -181,38 +225,5 @@
   #error "Too many consoles selected! Please uncomment ONLY ONE model."
 #endif
 
-// Show target console.
-#if defined(SCPH_1000)
-  #pragma message "Target Console: SCPH-1000 (NTSC-J)"
-#elif defined(SCPH_3000)
-  #pragma message "Target Console: SCPH-3000 (NTSC-J)"
-#elif defined(SCPH_3500_5000_5500)
-  #pragma message "Target Console: SCPH-3500/5000/5500 (NTSC-J)"
-#elif defined(SCPH_7000_7500_9000)
-  #pragma message "Target Console: SCPH-7500/9000 (NTSC-J)"
-#elif defined(SCPH_100)
-  #pragma message "Target Console: SCPH-100 (NTSC-J)"
-#elif defined(SCPH_102)
-  #pragma message "Target Console: SCPH-102 (PAL)"
-#elif defined(SCPH_xxx1)
-  #pragma message "Target Console: SCPH_xxx1 Generic NTSC-U/C"
-#elif defined(SCPH_xxx2)
-  #pragma message "Target Console: SCPH_xxx2 Generic PAL"
-#elif defined(SCPH_xxx3)
-  #pragma message "Target Console: SCPH_xxx3 Generic NTSC-J"
-#elif defined(SCPH_5903)
-  #pragma message "Target Console: SCPH-5903 (Video CD Dual-Interface)"
-#elif defined(SCPH_xxxx)
-  #pragma message "Target Console: SCPH_xxxx Universal Region Mode"
-#else
-  // Error if no console is uncommented
-  #error "Console not selected! Please uncomment one SCPH model."
-#endif
-
-// --- Feature Status ---
-
-#ifdef DEBUG_SERIAL_MONITOR
-  #pragma message "Feature: Serial Debug Monitor ENABLED"
-#endif
 
 

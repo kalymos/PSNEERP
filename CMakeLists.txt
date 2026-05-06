@@ -46,9 +46,8 @@ pico_generate_pio_header(PSNEERP ${CMAKE_CURRENT_LIST_DIR}/psneerp.pio)
 target_include_directories(PSNEERP PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(PSNEERP 0)
-pico_enable_stdio_usb(PSNEERP 1)
-
+pico_enable_stdio_usb(PSNEERP 0)
+pico_enable_stdio_uart(PSNEERP 1)
 # Add the standard library to the build
 target_link_libraries(PSNEERP 
     pico_stdlib 
@@ -63,4 +62,7 @@ target_include_directories(PSNEERP PRIVATE
 )
 
 pico_add_extra_outputs(PSNEERP)
+
+add_compile_options(-fdiagnostics-color=always)
+
 

@@ -1,5 +1,74 @@
 ; =============================================================================
-; 1. CAPTURE SUBQ (Synchronisation sur SQCK pour lire SUBQ)
+; 1. UART_TX 
+; =============================================================================
+
+.program uart_tx
+.side_set 1 opt
+
+; Programme UART TX simple
+; Pin de sortie configurée en side-set
+public entry:
+    out x, 1            side 0 [6] ; Start bit
+    set y, 7                       ; 8 bits de données
+bitloop:
+    out x, 1            side 1 [6] ; Envoie 1 bit
+    jmp y-- bitloop                ; Boucle pour les 8 bits
+    nop                 side 1 [6] ; Stop bit
+
+
+; =============================================================================
+; 2. LED 
+; =============================================================================
+.program ws2812
+.side_set 1
+
+.wrap_target
+    out x, 1        side 0 [2] ; Commence toujours par un front bas
+    jmp !x do_zero  side 1 [3] ; Si 0, reste haut peu de temps
+    jmp continue    side 1 [3] ; Si 1, reste haut plus longtemps
+do_zero:
+    nop             side 0 [3] ; Redescend pour le bit 0
+continue:
+    nop             side 0 [3] ; Redescend pour le bit 1
+.wrap
+
+
+; =============================================================================
+; 3. BIOS PATCHING
+; =============================================================================
+.program bios_patch
+.side_set 1 opt pindirs ; 'opt' doit être AVANT 'pindirs'
+
+public start_patch:
+    pull block              ; Valeur 1 : impulsions à compter
+    mov x, osr
+    pull block              ; Valeur 2 : délai bit_offset
+    mov y, osr
+    pull block              ; Valeur 3 : durée injection (override)
+
+    ; --- Attente des impulsions sur la pin d'entrée (AX ou AY) ---
+loop_pulses:
+    wait 1 pin 0            ; Attend front montant (AX/AY est sur InPin 0)
+    wait 0 pin 0            ; Attend front descendant
+    jmp x-- loop_pulses
+
+    ; --- Délai de précision avant injection ---
+loop_offset:
+    jmp y-- loop_offset [1] ; Délai ultra-stable
+
+    ; --- INJECTION SUR DX ---
+    nop          side 1     ; DX passe en SORTIE (Injecte la valeur par défaut du GPIO)
+    mov x, osr              ; Récupère la durée d'injection
+loop_override:
+    jmp x-- loop_override   ; Reste en sortie pendant X cycles
+    
+    nop          side 0     ; DX repasse en ENTRÉE (Relâche le bus)
+    irq 0                   ; Prévient le CPU
+
+
+
+; =============================================================================
+; 4. CAPTURE SUBQ (Synchronisation sur SQCK pour lire SUBQ)
 ; =============================================================================
 .program subq_capture
 ; Pin 0 (IN) : SUBQ
@@ -10,8 +79,9 @@
     in pins, 1      ; Échantillonne SUBQ vers ISR
 .wrap
 
+
 ; =============================================================================
-; 2. INJECTION SCEx (Modulation DATA basée sur WFCK)
+; 5. INJECTION SCEx (Modulation DATA basée sur WFCK)
 ; =============================================================================
 .program scex_inject
 .side_set 1 opt     ; Pin DATA
@@ -47,59 +117,124 @@ force_wrap:                 ; <-- L'étiquette pointe sur une instruction
 
 
 
-; =============================================================================
-; 3. BIOS PATCHING
-; =============================================================================
-.program bios_patch
-.side_set 1 opt ; Pin DX
 
-public start_patch:
-    pull block          
-    mov x, osr
-    pull block          
-    mov y, osr
-    pull block          
-    ; On ne peut pas utiliser 'z', on réutilise le registre OSR directement ou un autre transfert
-    ; Pour simplifier, si tu as besoin d'un 3ème compteur, utilise l'ISR ou repull.
-    ; Ici je corrige l'erreur de syntaxe en utilisant l'OSR pour le 3ème délai :
-    out null, 32        ; Vide OSR si nécessaire
-    pull block          
+% c-sdk {
+#include "hardware/clocks.h"
 
-loop_pulses:
-    wait 1 pin 0        
-    wait 0 pin 0
-    jmp x-- loop_pulses
+// 1. UART TX Initialization
+static inline void uart_tx_program_init(PIO pio, uint sm, uint offset, uint pin, uint baud) {
+    pio_sm_set_pins_with_mask(pio, sm, 1u << pin, 1u << pin);
+    pio_sm_set_pindirs_with_mask(pio, sm, 1u << pin, 1u << pin);
+    pio_gpio_init(pio, pin);
+    pio_sm_config c = uart_tx_program_get_default_config(offset);
+    sm_config_set_out_pins(&c, pin, 1);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_out_shift(&c, true, false, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    float div = (float)clock_get_hz(clk_sys) / (8 * baud);
+    sm_config_set_clkdiv(&c, div);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
 
-loop_offset:
-    jmp y-- loop_offset 
+// 2. WS2812 LED Initialization
+static inline void ws2812_program_init(PIO pio, uint sm, uint offset, uint pin, float freq, bool rgbw) {
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+    pio_sm_config c = ws2812_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_out_shift(&c, false, true, rgbw ? 32 : 24);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    float div = clock_get_hz(clk_sys) / (freq * 10);
+    sm_config_set_clkdiv(&c, div);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
 
-    nop side 1          
-loop_override:
-    ; On utilise l'OSR comme compteur si on ne veut pas écraser X ou Y
-    mov x, osr          
-loop_z_replacement:
-    jmp x-- loop_z_replacement 
+
+// 3. BIOS PATCH Initialization
+static inline void bios_patch_program_init(PIO pio, uint sm, uint offset, uint pin_dx, uint pin_ax) {
+    // 1. Initialize GPIOs
+    pio_gpio_init(pio, pin_dx);
+    pio_gpio_init(pio, pin_ax);
     
-    nop side 0          
-    irq wait 0          
-    jmp start_patch
+    // 2. Load default configuration
+    pio_sm_config c = bios_patch_program_get_default_config(offset);
+
+    // 3. DX Subtlety: Side-set controls the PIN DIRECTION (0=In/High-Z, 1=Out)
+    sm_config_set_sideset_pins(&c, pin_dx);
+    
+    // Set DX output value to 0 (to pull the bus LOW during injection)
+    pio_sm_set_pins_with_mask(pio, sm, 0, 1u << pin_dx);
+
+    // 4. AX/AY Subtlety: Define the detection pin (IN pins)
+    sm_config_set_in_pins(&c, pin_ax);
+    
+    // 5. Configure Shift registers: Out=MSB, In=MSB (No autopull/push)
+    sm_config_set_out_shift(&c, false, false, 32);
+
+    // 6. Apply configuration and enable State Machine
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Dynamically switch the input source pin (AX -> AY) on-the-fly
+static inline void bios_patch_switch_source(PIO pio, uint sm, uint pin) {
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false); // Set pin as Input
+    
+    pio_sm_config c = pio_sm_get_config(pio, sm);
+    sm_config_set_in_pins(&c, pin);
+    pio_sm_set_config(pio, sm, &c);
+}
 
 
-; =============================================================================
-; 4. LED 
-; =============================================================================
-.program ws2812
-.side_set 1
+// 4. SUBQ CAPTURE Initialization
+static inline void subq_capture_program_init(PIO pio, uint sm, uint offset, uint pin_subq, uint pin_sqck) {
+    pio_sm_config c = subq_capture_program_get_default_config(offset);
+    
+    // Set input pins: PIO reads pin_subq and synchronizes on pin_sqck
+    sm_config_set_in_pins(&c, pin_subq);
+    
+    // Configuration: Shift Right (LSB first), Autopush ENABLED, Threshold 32 bits
+    sm_config_set_in_shift(&c, true, true, 32);
+    
+    // Initialize GPIOs for PIO usage
+    pio_gpio_init(pio, pin_subq);
+    pio_gpio_init(pio, pin_sqck);
+    
+    // Apply configuration and enable State Machine
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
 
-.wrap_target
-    out x, 1        side 0 [2] ; Commence toujours par un front bas
-    jmp !x do_zero  side 1 [3] ; Si 0, reste haut peu de temps
-    jmp continue    side 1 [3] ; Si 1, reste haut plus longtemps
-do_zero:
-    nop             side 0 [3] ; Redescend pour le bit 0
-continue:
-    nop             side 0 [3] ; Redescend pour le bit 1
-.wrap
 
+// 5. SCEx SIGNAL INJECTION Initialization
+static inline void scex_inject_program_init(PIO pio, uint sm, uint offset, uint pin_data, uint pin_wfck) {
+    pio_gpio_init(pio, pin_data);
+    pio_gpio_init(pio, pin_wfck);
+    
+    // Set DATA as output and WFCK as input
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_data, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_wfck, 1, false);
+
+    pio_sm_config c = scex_inject_program_get_default_config(offset);
+    
+    // Configure OUT and Side-set pins for DATA bus
+    sm_config_set_out_pins(&c, pin_data, 1);
+    sm_config_set_sideset_pins(&c, pin_data);
+    
+    // Configure IN pins for WFCK synchronization (wait pin 0)
+    sm_config_set_in_pins(&c, pin_wfck);
+    
+    // Shift Right (LSB first), Autopull ENABLED, 32-bit threshold
+    sm_config_set_out_shift(&c, true, true, 32);
+
+    // Apply configuration and enable State Machine
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+%}
 
 

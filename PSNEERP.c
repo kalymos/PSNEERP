@@ -8,7 +8,7 @@
  *
  *  SCPH model number //  region code | region
  *--------------------------------------------------------------------------------------------------------------------*/
- #define SCPH_xxx1  //  NTSC U/C    | America.
+// #define SCPH_xxx1  //  NTSC U/C    | America.
 // #define SCPH_xxx2  //  PAL         | Europ.
 // #define SCPH_xxx3  //  NTSC J      | Asia.
 // #define SCPH_xxxx  //  Universal
@@ -29,7 +29,7 @@
  *                              // Data pin |                Adres pin            |
  *   SCPH model number          //          |    32-pin BIOS   |   40-pin BIOS    | BIOS version
  *-------------------------------------------------------------------------------------------------------------------*/
-// #define SCPH_102             // DX - D0  | AX - A7          |                  | 4.4e - CRC 0BAD7EA9, 4.5e -CRC 76B880E5
+ #define SCPH_102             // DX - D0  | AX - A7          |                  | 4.4e - CRC 0BAD7EA9, 4.5e -CRC 76B880E5
 // #define SCPH_100             // DX - D0  | AX - A7          |                  | 4.3j - CRC F2AF798B
 // #define SCPH_7000_7500_9000  // DX - D0  | AX - A7          |                  | 4.0j - CRC EC541CD0
 // #define SCPH_3500_5000_5500  // DX - D0  | AX - A16         | AX - A15         | 3.0j - CRC FF3EEB8C, 2.2j - CRC 24FC7E17, 2.1j - CRC BC190209 
@@ -52,14 +52,14 @@
  * - Higher values (15-20-25-30): Possible for older or weak CD-ROM laser units.
  */
 
-#define REQUEST_INJECT_GAP 5      // Stealth interval (must be 4-8 AND < REQUEST_INJECT_TRIGGER)
+ #define REQUEST_INJECT_GAP 5      // Stealth interval (must be 4-8 AND < REQUEST_INJECT_TRIGGER)
 /*
  * NOTE: REQUEST_INJECT_GAP defines the "cool-off" period between injections.
  * - Optimal range: 4 to 8 (for natural CD timing & anti-mod bypass).
  * - Constraint: Must ALWAYS be lower than REQUEST_INJECT_TRIGGER.
  */
 
-//#define PATCH_SWITCHE    // This allows the user to disable the BIOS patch on-the-fly.
+ #define PATCH_SWITCHE    // This allows the user to disable the BIOS patch on-the-fly.
 /*
  * This allows you to bypass the memory card blocking problems on the SCPH-7000.
  * - Configure Pin D5 as Input.
@@ -67,56 +67,16 @@
  * - Exit immediately the patch BIOS if the switch pulls the pin to GND
  */
 
-// #define DEBUG_SERIAL_MONITOR  // Enables serial monitor output. 
+ #define DEBUG_SERIAL_MONITOR  // Enables serial monitor output. 
 /*
- *  Requires compilation with Arduino libs!
- *  For Arduino connect TXD and GND, for ATtiny PB3 (pin 2) and GND, to your serial card RXD and GND.
- *
- *   For Arduino (Uno/Nano/Pro Mini):
- *   TX (Pin 1)  ----->  RX (Serial Card)
- *   GND         ----->  GND
- *
- *   For ATtiny (25/45/85):
- *   Pin 2 (PB3) ----->  RX (Serial Card)
- *   Pin 4 (GND) ----->  GND
+
  *
  */
 
 /******************************************************************************************************************
  *           Summary of practical information. Fuses. Pinout
  *******************************************************************************************************************
- * Fuses  
- * MCU        | High | Low | Extended
- * --------------------------------------------------
- * ATmega32U4 | DF   | EE  | D7 
- * ATtiny     | DF   | E2  | FF
- *
- * Pinout
- * Arduino   | PSNee     |
- * ---------------------------------------------------
- * VCC       | VCC       |
- * GND       | GND       |
- * RST       | RESET     | Only for JAP_FAT
- * D2        | BIOS AX   | Only for Bios patch
- * D3        | BIOS AY   | Only for BIOS patch SCPH_1000, SCPH_3000
- * D4        | BIOS DX   | Only for Bios patch
- * D5        | SWITCH    | Optional for disabling Bios patch
- * D6        | SQCK      |
- * D7        | SUBQ      |
- * D8        | DATA      |
- * D9        | WFCK      |
- * D13 ^ D10 | LED       | D10 only for ATmega32U4
- *
- * ATtiny | PSNee        | ISP   |
- * ---------------------------------------------------
- * Pin1   |              | RESET |
- * Pin2   | LED ^ serial |       | serial only for DEBUG_SERIAL_MONITOR
- * Pin3   | WFCK         |       |
- * Pin4   | GND          | GND   |
- * Pin5   | SQCK         | MOSI  |
- * Pin6   | SUBQ         | MISO  |
- * Pin7   | DATA         | SCK   |
- * Pin8   | VCC          | VCC   |
+
  *******************************************************************************************************************/
 
 /*******************************************************************************************************************
@@ -127,57 +87,59 @@
 #include "settings.h"
 #include "psneerp.pio.h"
 
-#define REQUEST_INJECT_TRIGGER  10
-#define REQUEST_INJECT_GAP      5
+uint offsetPATCH;  
 
 volatile int wfck_mode = 0;  //Flag initializing for automatic console generation selection 0 = old, 1 = pu-22 end  ++
 volatile uint32_t SUBQBuffer32[3]; // Global buffer to store the 12-byte SUBQ channel data
 
 volatile uint32_t request_counter = 0;
 
-// #if defined(DEBUG_SERIAL_MONITOR)
-//   uint16_t global_window = 0; // Stores the remaining cycles from the detection window
-// #endif
+ #if defined(DEBUG_SERIAL_MONITOR)
+   uint16_t global_window = 0; // Stores the remaining cycles from the detection window
+ #endif
 
 /*******************************************************************************************************************
  *                         Code section
  ********************************************************************************************************************/
 /*******************************************************************************************************************
-           NEOPIXEL / WS2812 LED CONTROL SECTION
-           Handles visual feedback for system status and SUBQ stability.
+#          UART 
 *********************************************************************************************************************/
 
+// --- Déclarations globales (en haut du fichier) ---
+static uint sm_debug; // On la déclare ici pour qu'elle soit visible partout
+
+void init_pio_debug() {
+    uint offset = pio_add_program(pio1, &uart_tx_program);  
+    sm_debug = pio_claim_unused_sm(pio1, true); // On utilise la variable globale
+    
+    // Correction du nom ici :
+    uart_tx_program_init(pio1, sm_debug, offset, PIN_DEBUG_TX, 115200);;
+}
+
+void pio_putc(char c) {
+    // On utilise la variable globale sm_debug
+    pio_sm_put_blocking(pio1, sm_debug, (uint32_t)c);
+}
+
+/*******************************************************************************************************************
+*          NEOPIXEL / WS2812 LED CONTROL SECTION
+*          Handles visual feedback for system status and SUBQ stability.
+*********************************************************************************************************************/
 
 // Global variables for the LED PIO
 PIO pioLED = pio1; // Use the second PIO block to avoid interference with SUBQ/BIOS
 uint smLED = 0;
 
 void NeoPixel_Init() {
-    smLED = pio_claim_unused_sm(pioLED, true);
+    // 1. Charger le code dans le PIO
     uint offset = pio_add_program(pioLED, &ws2812_program);
     
-    // Diviseur pour 800kHz (WS2812 standard)
-    // Le programme PIO fait environ 10 cycles par bit
-    float div = clock_get_hz(clk_sys) / (800000.0f * 10.0f);
+    // 2. Réserver une State Machine
+    smLED = pio_claim_unused_sm(pioLED, true);
     
-    pio_sm_config c = ws2812_program_get_default_config(offset);
-    sm_config_set_sideset_pins(&c, LED_PIN); ;
-    
-    // IMPORTANT : Shift à DROITE (true) car on utilise "out x, 1" 
-    // et Autopush à 24 bits
-    sm_config_set_out_shift(&c, false, true, 24); 
-    
-    sm_config_set_clkdiv(&c, div);
-    
-    pio_gpio_init(pioLED, LED_PIN); 
-    pio_sm_set_consecutive_pindirs(pioLED, smLED, LED_PIN, 1, true);
-    
-    pio_sm_init(pioLED, smLED, offset, &c);
-    pio_sm_set_enabled(pioLED, smLED, true);
+    // 3. Configurer tout le reste (GPIO, Clock, FIFO, Shift) via ton .h
+    ws2812_program_init(pioLED, smLED, offset, LED_PIN, 800000.0f, false);
 }
-
-
-
 
 
 /**
@@ -207,7 +169,6 @@ void SetLEDDynamic(uint32_t color, uint8_t intensity) {
     uint32_t final_color = (g << 16) | (r << 8) | b;
     pio_sm_put_blocking(pioLED, smLED, final_color << 8u);
 }
-
 
 
 /****************************************************************************************
@@ -256,64 +217,70 @@ uint smPATCH = 0;                 // PIO state machine ID for BIOS patching
  * PIO IRQ Handler: Increments patch stage when the PIO sends an interrupt
  */
 void on_pio_patch_irq() {
+    // Check if PIO0 generated interrupt 0
     if (pio_interrupt_get(pio0, 0)) {
         patch_stage++; 
         pio_interrupt_clear(pio0, 0);
     }
 }
 
-/**
- * Main BIOS Patching Logic
- */
 void Bios_Patching(void) {
+    // --- 1. HARDWARE BYPASS CHECK ---
     #if defined(PATCH_SWITCHE)
-        PIN_SWITCH_INPUT;
-        gpio_pull_up(PIN_SWITCH); 
+        gpio_pull_up(PIN_SWITCH);
         sleep_us(10);
-        if (PIN_SWITCH_READ == 0) return; // Exit if hardware switch is disabled
+        if (gpio_get(PIN_SWITCH) == 0) return; 
     #endif
 
-    // IRQ Configuration for PIO 0
-    irq_set_exclusive_handler(PIO0_IRQ_0, on_pio_patch_irq);
-    irq_set_enabled(PIO0_IRQ_0, true);
-    pio_set_irq0_source_enabled(pio0, pis_interrupt0, true);
-
-    patch_stage = 0;
     uint8_t current_confirms = 0;
+    patch_stage = 0; // Reset sync flag for IRQ
 
-    // --- PHASE 1 & 2 : SILENCE DETECTION (AX) ---
-    SetLEDDynamic(LED_RED, 100); // RED LED indicates initial patch stage
+    // --- 2. PHASE 1: STABILIZATION & ALIGNMENT (AX) ---
+    // Establish a deterministic hardware timing reference.
+    if (gpio_get(PIN_AX) != 0) {
+        while (gpio_get(PIN_AX) != 0); // Wait for AX Falling
+        while (gpio_get(PIN_AX) == 0); // Wait for AX Rising
+    } else {
+        while (gpio_get(PIN_AX) == 0); // Wait for AX Rising
+    }
+
+    // --- 3. PHASE 2: SILENCE DETECTION ---
+    // Validate the boot stage by identifying the required silence windows.
+    SetLEDDynamic(LED_RED, 100); 
     while (current_confirms < CONFIRM_COUNTER_TARGET) {
         uint32_t count = SILENCE_THRESHOLD; 
         while (count > 0) {
-            if (gpio_get(PIN_AX)) {
-                while (gpio_get(PIN_AX)); // Wait for signal to clear
+            if (gpio_get(PIN_AX) != 0) {
+                while (gpio_get(PIN_AX) != 0); // Reset on activity
                 break; 
             }
             count--;
         }
-        if (count == 0) current_confirms++; // Validate one silent window
+        if (count == 0) current_confirms++; // One silence window validated
     }
 
-    // --- PHASE 3 : AX INJECTION ---
-    // Load parameters into PIO FIFO
-    pio_sm_put_blocking(pio0, smPATCH, PULSE_COUNT_PIO);
-    pio_sm_put_blocking(pio0, smPATCH, BIT_OFFSET_VAL);
-    pio_sm_put_blocking(pio0, smPATCH, OVERRIDE_VAL);
+    // --- 4. PHASE 3: AX INJECTION (HAND OVER TO PIO) ---
+    // Initialize PIO for AX monitoring and DX injection
+    bios_patch_program_init(pio0, smPATCH, offsetPATCH, PIN_DX, PIN_AX);
+    
+    // Load parameters (Pulse count, timing offset, override duration)
+    pio_sm_put_blocking(pio0, smPATCH, PULSE_COUNT); 
+    pio_sm_put_blocking(pio0, smPATCH, BIT_OFFSET);
+    pio_sm_put_blocking(pio0, smPATCH, OVERRIDE);
 
-    // Wait for PIO to complete the first stage
+    // Busy-wait for PIO IRQ (Phase 3 completion)
     while (patch_stage < 1) tight_loop_contents();
 
+    // --- 5. PHASE 4 & 5: SECONDARY PATCHING SEQUENCE ---
     #ifdef PHASE_TWO_PATCH
-        SetLEDDynamic(LED_ORANGE, 100); // ORANGE LED indicates second patch stage
         current_confirms = 0;
 
-        // --- PHASE 4 : GAP DETECTION (SECONDARY SILENCE) ---
+        // Monitor for the specific silent gap before the second patch window
         while (current_confirms < CONFIRM_COUNTER_TARGET_2) {
             uint32_t count = SILENCE_THRESHOLD;
             while (count > 0) {
-                if (gpio_get(PIN_AX)) {
-                    while (gpio_get(PIN_AX));
+                if (gpio_get(PIN_AX) != 0) { // Still monitoring AX for silence
+                    while (gpio_get(PIN_AX) != 0);
                     break;
                 }
                 count--;
@@ -321,13 +288,19 @@ void Bios_Patching(void) {
             if (count == 0) current_confirms++;
         }
 
-        // --- PHASE 5 : AY INJECTION ---
-        // Load secondary parameters into PIO FIFO
-        pio_sm_put_blocking(pio0, smPATCH, PULSE_COUNT_2_PIO);
-        pio_sm_put_blocking(pio0, smPATCH, BIT_OFFSET_2_VAL);
-        pio_sm_put_blocking(pio0, smPATCH, OVERRIDE_2_VAL);
+        // --- PHASE 5: AY INJECTION ---
+        SetLEDDynamic(LED_ORANGE, 100);
+        
+        // Switch PIO source from AX to AY
+        // Ajoute offsetPATCH comme 3ème argument
+        bios_patch_switch_source(pio0, smPATCH, offsetPATCH, PIN_AY);
+        
+        // Send secondary parameters to PIO
+        pio_sm_put_blocking(pio0, smPATCH, PULSE_COUNT_2);
+        pio_sm_put_blocking(pio0, smPATCH, BIT_OFFSET_2);
+        pio_sm_put_blocking(pio0, smPATCH, OVERRIDE_2);
 
-        // Wait for PIO to complete the final stage
+        // Wait for final completion
         while (patch_stage < 2) tight_loop_contents();
     #endif
 }
@@ -414,7 +387,7 @@ void BoardDetection() {
 
   // If the window expires without seeing enough LOW pulses, it remains wfck_mode = 0 (GATE)
   #if defined(DEBUG_SERIAL_MONITOR)
-    BoardDetectionLog(detectionWindow, wfck_mode, injectSCEx);
+    BoardDetectionLog(detectionWindow, wfck_mode, INJECT_SCEx);
   #endif
   
 }
@@ -434,25 +407,6 @@ void BoardDetection() {
 PIO pioSUBQ = pio0;       // PIO Block Instance (pio0 or pio1)
 uint smSUBQ = 0;          // State Machine Index (0 to 3)
 uint offsetSUBQ;          // Program offset in PIO instruction memory
-
-/**
- * PIO Initialization for SUBQ Capture
- */
-void subq_pio_init(PIO pioSUBQ_inst, uint smSUBQ_inst, uint offsetSUBQ_inst, uint pin_subq, uint pin_sqck) {
-    pio_sm_config configSUBQ = subq_capture_program_get_default_config(offsetSUBQ_inst);
-    
-    // Set input pins: PIO reads PIN_SUBQ and synchronizes on PIN_SQCK
-    sm_config_set_in_pins(&configSUBQ, pin_subq);
-    
-    // Configuration: Shift Right (LSB first), Autopush ENABLED, Threshold 32 bits
-    sm_config_set_in_shift(&configSUBQ, true, true, 32);
-    
-    pio_gpio_init(pioSUBQ_inst, pin_subq);
-    pio_gpio_init(pioSUBQ_inst, pin_sqck);
-    
-    pio_sm_init(pioSUBQ_inst, smSUBQ_inst, offsetSUBQ_inst, &configSUBQ);
-    pio_sm_set_enabled(pioSUBQ_inst, smSUBQ_inst, true);
-}
 
 /**
  * Capture Function: Retrieves 96 bits of data from the PIO FIFO
@@ -682,13 +636,19 @@ void Init() {
         uint offsetPATCH = pio_add_program(pio0, &bios_patch_program);
         smPATCH = pio_claim_unused_sm(pio0, true);
         // bios_patch_pio_init would be called here if you have a custom init helper
+        #ifdef PATCH_SWITCHE
+            gpio_init(PIN_SWITCH);
+            gpio_set_dir(PIN_SWITCH, GPIO_IN);
+            gpio_pull_up(PIN_SWITCH);
+            
+        #endif
     #endif
 
     // 3. PIO Program Loading for SUBQ Capture
     offsetSUBQ = pio_add_program(pioSUBQ, &subq_capture_program);
     
     // Initialize SUBQ state machine with explicit global variables
-    subq_pio_init(pioSUBQ, smSUBQ, offsetSUBQ, PIN_SUBQ, PIN_SQCK);
+    subq_capture_program_init(pioSUBQ, smSUBQ, offsetSUBQ, PIN_SUBQ, PIN_SQCK);
     
     // Initial visual feedback: Dim White (System Ready)
     SetLEDDynamic(LED_WHITE, 50);
@@ -708,10 +668,10 @@ int main() {
     // Identify board revision (PU-7 to PU-22+) to set correct injection timings
     BoardDetection();
 
-    #if defined(DEBUG_SERIAL_MONITOR)
-        // Display initial board detection results (Window remaining & WFCK mode)
-        BoardDetectionLog(global_window, wfck_mode, INJECT_SCEx);
-    #endif
+    // #if defined(DEBUG_SERIAL_MONITOR)
+    //     // Display initial board detection results (Window remaining & WFCK mode)
+    //     BoardDetectionLog(global_window, wfck_mode, INJECT_SCEx);
+    // #endif
 
     while (true) {
         // Timing Sync: Prevent reading the tail end of the previous SUBQ packet
@@ -749,6 +709,8 @@ int main() {
         }
     }
     return 0;
+
+
 }
 
 
