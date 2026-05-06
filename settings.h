@@ -108,58 +108,57 @@
 ------------------------------------------------------------------------------------------------*/
 
 #if defined(DEBUG_SERIAL_MONITOR)
-#include <stdio.h>
-#include "hardware/clocks.h"
+  #include "hardware/clocks.h"
 
 
-// Variable externe
-extern volatile uint32_t request_counter;
+  // Variable externe
+  extern volatile uint32_t request_counter;
 
-void BoardDetectionLog(uint32_t window_result, uint8_t Wfck_mode, uint8_t region) {
-    static const char* regionNames[] = {
-        "NTSC-J",    // 0
-        "NTSC-U/C",  // 1
-        "PAL",       // 2
-        "Universal"  // 3
-    };
+  void BoardDetectionLog(uint32_t window_result, uint8_t Wfck_mode, uint8_t region) {
+      static const char* regionNames[] = {
+          "NTSC-J",    // 0
+          "NTSC-U/C",  // 1
+          "PAL",       // 2
+          "Universal"  // 3
+      };
 
-    printf("\n");
-    printf(" CPU Speed: %lu MHz\n", clock_get_hz(clk_sys) / 1000000L);
-    printf(" Sync Window: %lu\n", window_result); 
-    printf(" WFCK Mode: %u\n", Wfck_mode);
-    printf(" Region ID: %s\n", regionNames[region]);
-    printf("\n");
-}
+      printf("\n");
+      printf(" CPU Speed: %lu MHz\n", clock_get_hz(clk_sys) / 1000000L);
+      printf(" Sync Window: %u\n", (unsigned int)window_result); 
+      printf(" WFCK Mode: %u\n", Wfck_mode);
+      printf(" Region ID: %s\n", regionNames[region]);
+      printf("\n");
+  }
 
-void CaptureSUBQLog(uint32_t *dataBuffer32) {
-    static uint32_t errorCount = 0;
+  void CaptureSUBQLog(uint32_t *dataBuffer32) {
+      static uint32_t errorCount = 0;
 
-    // --- FILTRAGE D'ERREUR (32-bit rapide) ---
-    // Vérifie si les 3 mots (96 bits) sont à zéro en seulement 3 tests
-    if (dataBuffer32[0] == 0 && dataBuffer32[1] == 0 && dataBuffer32[2] == 0) {
-        errorCount++;
-        return;
-    }
+      // --- FILTRAGE D'ERREUR (32-bit rapide) ---
+      // Vérifie si les 3 mots (96 bits) sont à zéro en seulement 3 tests
+      if (dataBuffer32[0] == 0 && dataBuffer32[1] == 0 && dataBuffer32[2] == 0) {
+          errorCount++;
+          return;
+      }
 
-    // --- AFFICHAGE HEXADÉCIMAL ---
-    // On itère sur les 3 mots de 32 bits
-    for (uint8_t i = 0; i < 3; i++) {
-        uint32_t word = dataBuffer32[i];
-        // Extraction et affichage des 4 octets de chaque mot (LSB first)
-        printf("%02X %02X %02X %02X ", 
-               (uint8_t)(word & 0xFF), 
-               (uint8_t)((word >> 8) & 0xFF), 
-               (uint8_t)((word >> 16) & 0xFF), 
-               (uint8_t)((word >> 24) & 0xFF));
-    }
+      // --- AFFICHAGE HEXADÉCIMAL ---
+      // On itère sur les 3 mots de 32 bits
+      for (uint8_t i = 0; i < 3; i++) {
+          uint32_t word = dataBuffer32[i];
+          // Extraction et affichage des 4 octets de chaque mot (LSB first)
+          printf("%02X %02X %02X %02X ", 
+                (uint8_t)(word & 0xFF), 
+                (uint8_t)((word >> 8) & 0xFF), 
+                (uint8_t)((word >> 16) & 0xFF), 
+                (uint8_t)((word >> 24) & 0xFF));
+      }
 
-    // Affichage du compteur global
-    printf("| Hyst: %lu\n", request_counter);
-}
+      // Affichage du compteur global
+      printf("| Hyst: %lu\n", request_counter);
+  }
 
-void InjectLog() {     
-    printf("           INJECT ! \n");
-}
+  void InjectLog() {     
+      printf("           INJECT ! \n");
+  }
 
 #endif
 

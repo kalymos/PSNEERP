@@ -6,9 +6,7 @@
 #include "hardware/pio.h"    // Indispensable
 #include "hardware/clocks.h" // Indispensable pour SetLED
 #include "psneerp.pio.h"     // UNIQUEMENT le .h généré, JAMAIS le .pio
-
-
-#define PIN_NEOPIXEL 16
+ 
 
 // Couleurs préselectionnées (Format 0xGGRRBB00)
 

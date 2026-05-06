@@ -36,6 +36,8 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(PSNEERP PSNEERP.c )
+target_compile_options(PSNEERP PRIVATE "-save-temps")
+
 
 pico_set_program_name(PSNEERP "PSNEERP")
 pico_set_program_version(PSNEERP "0.1")
