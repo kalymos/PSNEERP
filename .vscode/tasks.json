@@ -4,7 +4,15 @@
         {
             "label": "Compile Project",
             "type": "shell",
-            "command": "echo '\u001b[1;36m >>> PLAYSTATION SYSTEM NEE EXTENDED EXPERIENCE RECURSIVE PROJECT <<<\u001b[0m' && cd ${workspaceFolder} && touch settings.h && /home/nic/.pico-sdk/ninja/v1.12.1/ninja -C build 2>&1 | tee /tmp/pico.log | sed -E -n 's/.*#pragma message: (.*)/  \u001b[1;34m»\u001b[0m \u001b[1;32m\\1\u001b[0m/p; s/.*#error (.*)/  \u001b[1;31m✘ [ERREUR]\u001b[0m \\1/p; /error:|Building|Linking/p' | sed -E 's/STRING\\(LED_PIN\\)/16/g; s/STRING\\(REQUEST_INJECT_TRIGGER\\)/10/g; s/STRING\\(REQUEST_INJECT_GAP\\)/5/g; s/[\"'\\''\\)]//g' && if [ ${PIPESTATUS[0]} -eq 0 ]; then echo -e '\n\u001b[1;32m[SUCCESS] Build finished!\u001b[0m'; else echo -e '\n\u001b[1;41m  BUILD FAILED  \u001b[0m'; fi",
+            "linux": {
+                "command": "echo '\u001b[1;36m >>> PLAYSTATION SYSTEM NEE EXTENDED EXPERIENCE RECURSIVE PROJECT <<<\u001b[0m' && cd ${workspaceFolder} && touch settings.h && /home/nic/.pico-sdk/ninja/v1.12.1/ninja -C build 2>&1 | tee /tmp/pico.log | sed -E -n 's/.*#pragma message: (.*)/  \u001b[1;34m»\u001b[0m \u001b[1;32m\\1\u001b[0m/p; s/.*#error (.*)/  \u001b[1;31m✘ [ERREUR]\u001b[0m \\1/p; /error:|Building|Linking/p' | sed -E 's/STRING\\(LED_PIN\\)/16/g; s/STRING\\(REQUEST_INJECT_TRIGGER\\)/10/g; s/STRING\\(REQUEST_INJECT_GAP\\)/5/g; s/[\"'\\''\\)]//g' && if [ ${PIPESTATUS[0]} -eq 0 ]; then echo -e '\n\u001b[1;32m[SUCCESS] Build finished!\u001b[0m'; else echo -e '\n\u001b[1;41m  BUILD FAILED  \u001b[0m'; fi"
+            },
+            "osx": {
+                "command": "echo '\u001b[1;36m >>> PLAYSTATION SYSTEM NEE EXTENDED EXPERIENCE RECURSIVE PROJECT <<<\u001b[0m' && cd ${workspaceFolder} && touch settings.h && ${userHome}/.pico-sdk/ninja/v1.12.1/ninja -C build 2>&1 | tee /tmp/pico.log | sed -E -n 's/.*#pragma message: (.*)/  \u001b[1;34m»\u001b[0m \u001b[1;32m\\1\u001b[0m/p; s/.*#error (.*)/  \u001b[1;31m✘ [ERREUR]\u001b[0m \\1/p; /error:|Building|Linking/p' | sed -E 's/STRING\\(LED_PIN\\)/16/g; s/STRING\\(REQUEST_INJECT_TRIGGER\\)/10/g; s/STRING\\(REQUEST_INJECT_GAP\\)/5/g; s/[\"'\\''\\)]//g' && if [ $? -eq 0 ]; then echo '\n\u001b[1;32m[SUCCESS] Build finished!\u001b[0m'; else echo '\n\u001b[1;41m  BUILD FAILED  \u001b[0m'; fi"
+            },
+            "windows": {
+                "command": "echo \u001b[1;36m >>> PLAYSTATION SYSTEM NEE EXTENDED EXPERIENCE RECURSIVE PROJECT <<<\u001b[0m && cd /d ${workspaceFolder} && powershell -Command \"(Get-Item settings.h).LastWriteTime = Get-Date\" && (${env:USERPROFILE}/.pico-sdk/ninja/v1.12.1/ninja.exe -C build 2>&1 | tee build.log) && (powershell -Command \"(Get-Content build.log) | ForEach-Object { $_ -replace '.*#pragma message: ', '  \u001b[1;34m»\u001b[0m \u001b[1;32m' -replace '.*#error ', '  \u001b[1;31m✘ [ERREUR]\u001b[0m ' -replace 'STRING\\(LED_PIN\\)', '16' -replace 'STRING\\(REQUEST_INJECT_TRIGGER\\)', '10' -replace 'STRING\\(REQUEST_INJECT_GAP\\)', '5' -replace '[\\\"\\)\\']', '' } | Select-String '»', '✘', 'error:', 'Building', 'Linking' | Select-Object -Unique\") && (findstr /C:\"error:\" build.log >nul && (echo. && echo \u001b[1;41m  BUILD FAILED  \u001b[0m) || (echo. && echo \u001b[1;32m[SUCCESS] Build finished!\u001b[0m))"
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true

@@ -29,7 +29,7 @@
  *                              // Data pin |                Adres pin            |
  *   SCPH model number          //          |    32-pin BIOS   |   40-pin BIOS    | BIOS version
  *-------------------------------------------------------------------------------------------------------------------*/
- #define SCPH_102             // DX - D0  | AX - A7          |                  | 4.4e - CRC 0BAD7EA9, 4.5e -CRC 76B880E5
+// #define SCPH_102             // DX - D0  | AX - A7          |                  | 4.4e - CRC 0BAD7EA9, 4.5e -CRC 76B880E5
 // #define SCPH_100             // DX - D0  | AX - A7          |                  | 4.3j - CRC F2AF798B
 // #define SCPH_7000_7500_9000  // DX - D0  | AX - A7          |                  | 4.0j - CRC EC541CD0
 // #define SCPH_3500_5000_5500  // DX - D0  | AX - A16         | AX - A15         | 3.0j - CRC FF3EEB8C, 2.2j - CRC 24FC7E17, 2.1j - CRC BC190209 
@@ -43,7 +43,7 @@
  // --- Hardware Pins ---
 #define LED_PIN  16  // Default for Waveshare Pico Zero
 
-#define REQUEST_INJECT_TRIGGER 10 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
+#define REQUEST_INJECT_TRIGGER 15 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
 /*
  * TRIGGER CALIBRATION:
  * - Lower values (<5): Possible, but not beneficial.
