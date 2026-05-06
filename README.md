@@ -1,7 +1,7 @@
 # PSNEERP
 PSNEERP is compatible with all retail PlayStation 1 models and various AVR microcontrollers.   
 
-## For all useful information, please consult the [Wiki](https://github.com/kalymos/PsNee/wiki).
+## It runs under VS Code; it's the only platform that natively supports PIOs.
 
 ![Logo](/images/logo.png)
 
