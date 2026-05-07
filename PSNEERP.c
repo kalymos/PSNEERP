@@ -8,7 +8,7 @@
  *
  *  SCPH model number //  region code | region
  *--------------------------------------------------------------------------------------------------------------------*/
-// #define SCPH_xxx1  //  NTSC U/C    | America.
+ #define SCPH_xxx1  //  NTSC U/C    | America.
 // #define SCPH_xxx2  //  PAL         | Europ.
 // #define SCPH_xxx3  //  NTSC J      | Asia.
 // #define SCPH_xxxx  //  Universal
@@ -105,21 +105,64 @@ volatile uint32_t request_counter = 0;
 #          UART 
 *********************************************************************************************************************/
 
-// --- Déclarations globales (en haut du fichier) ---
-static uint sm_debug; // On la déclare ici pour qu'elle soit visible partout
+#include "psneerp.pio.h"
+#include "hardware/clocks.h"
+#include "pico/stdio/driver.h" // Nécessaire pour le driver personnalisé
 
-void init_pio_debug() {
-    uint offset = pio_add_program(pio1, &uart_tx_program);  
-    sm_debug = pio_claim_unused_sm(pio1, true); // On utilise la variable globale
-    
-    // Correction du nom ici :
-    uart_tx_program_init(pio1, sm_debug, offset, PIN_DEBUG_TX, 115200);;
+static uint sm_debug; 
+
+// --- 1. Définition du Driver pour printf ---
+
+static void stdio_pio_out_chars(const char *buf, int len) {
+    for (int i = 0; i < len; i++) {
+        // On utilise votre fonction pio_putc existante
+        pio_sm_put_blocking(pio1, sm_debug, (uint32_t)buf[i]);
+    }
 }
+
+// Structure du driver
+static stdio_driver_t stdio_pio_debug = {
+    .out_chars = stdio_pio_out_chars,
+    .crlf_enabled = true // Gère automatiquement les \n -> \r\n
+};
+
+// --- 2. Fonctions d'envoi manuelles ---
 
 void pio_putc(char c) {
-    // On utilise la variable globale sm_debug
     pio_sm_put_blocking(pio1, sm_debug, (uint32_t)c);
 }
+
+void pio_puts(const char *s) {
+    while (*s) pio_putc(*s++);
+}
+
+// --- 3. Initialisation complète ---
+
+void init_pio_debug() {
+    // Initialisation du PIO (votre code existant)
+    uint offset = pio_add_program(pio1, &uart_tx_program);  
+    sm_debug = pio_claim_unused_sm(pio1, true);
+    
+    pio_gpio_init(pio1, PIN_DEBUG_TX);
+    pio_sm_set_consecutive_pindirs(pio1, sm_debug, PIN_DEBUG_TX, 1, true);
+
+    pio_sm_config c = uart_tx_program_get_default_config(offset);
+    sm_config_set_out_pins(&c, PIN_DEBUG_TX, 1);
+    sm_config_set_sideset_pins(&c, PIN_DEBUG_TX);
+
+    sm_config_set_out_shift(&c, true, true, 8);
+    
+    float div = (float)clock_get_hz(clk_sys) / (8 * 115200);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio1, sm_debug, offset, &c);
+    pio_sm_set_enabled(pio1, sm_debug, true);
+
+    // --- ACTIVATION DU PRINTF SUR PIO ---
+    stdio_set_driver_enabled(&stdio_pio_debug, true);
+}
+
+
 
 /*******************************************************************************************************************
 *          NEOPIXEL / WS2812 LED CONTROL SECTION
@@ -315,11 +358,15 @@ void Bios_Patching(void) {
  *    Distinguishes motherboard generations (PU-7 through PU-18) by analyzing 
  *    the behavior of the WFCK signal.
  *
- * SIGNAL CHARACTERISTICS:
- *    - Legacy Boards (PU-7 to PU-20): WFCK acts as a static GATE signal. 
- *      It remains HIGH.
- *    - Modern Boards (PU-22 or newer): WFCK is an oscillating clock signal 
- *      (Frequency-based).
+ * SIGNAL MODES & LED INDICATORS:
+ *    - Mode 0 (Legacy - PU-7 to PU-20): WFCK stays HIGH (Static GATE).
+ *      LED: MAGENTA (Solid) - Indicates successful legacy board detection.
+ * 
+ *    - Mode 1 (Modern - PU-22 or newer): WFCK oscillates (Frequency-based).
+ *      LED: CYAN (Solid) - Indicates successful modern board detection.
+ * 
+ *    - Mode 2 (Error/Ground): WFCK is stuck LOW (Short circuit or wiring issue).
+ *      LED: BLUE (Blinks 3 times, then solid) - Indicates a critical signal error.
  * 
  * 
  * WFCK: __-----------------------  // CONTINUOUS (PU-7 .. PU-20)(GATE)
@@ -339,58 +386,67 @@ void Bios_Patching(void) {
  *******************************************************************************************************************/
 
 void BoardDetection() {
-    wfck_mode = 0;           // Default: Legacy (GATE)
-    int pulse_hits = 25;     // Required oscillations to confirm FREQUENCY mode
-    int detectionWindow = 1000000; 
+    
+    wfck_mode = 0;                    // Default: Mode 0 (Legacy/GATE)
+    uint8_t pulse_hits = 25;          // Required oscillations to confirm Mode 1 (Frequency)
+    uint32_t detectionWindow = 1000000; 
 
-    // If we are not patching the BIOS, we wait for the CD processor 
-    // to wake up and stabilize WFCK before starting detection.
+    // Wait for the  processor to stabilize if not in BIOS patch mode
     #if !defined(BIOS_PATCH)
+        printf("Sleep 300ms...\n");
         sleep_ms(300);          
     #endif        
 
-    while (--detectionWindow) {
-        /**
-         * If WFCK is "CONTINUOUS" (Legacy), it stays HIGH. gpio_get(PIN_WFCK) will always be 1.
-         * If WFCK is "FREQUENCY" (Modern), it will hit 0 (LOW) periodically.
-         */
-        if (!gpio_get(PIN_WFCK)) {  // Detect a LOW state (only possible in FREQUENCY mode)
+    // Main detection loop
+    while (detectionWindow > 0) {
+        detectionWindow--; 
 
-            pulse_hits--;            // Register one oscillation hit
+        // Monitor for LOW transitions (only occurs in Frequency mode or Error state)
+        if (!gpio_get(PIN_WFCK)) { 
+            pulse_hits--;        
 
             if (pulse_hits == 0) {
-            wfck_mode = 1;     // Confirmed: FREQUENCY mode (PU-22 or newer)
-            SetLEDDynamic(LED_CYAN, 100);
-            #if defined(DEBUG_SERIAL_MONITOR)
-            global_window = detectionWindow;
-            #endif
-            gpio_disable_pulls(PIN_WFCK);
-            return;            // Exit as soon as we are sure
-        }
+                wfck_mode = 1;        // Confirmed: Mode 1 (Frequency)
+                break;         
+            }
 
-            /**
-             * SYNC: Wait for the signal to return HIGH.
-             * Ensures each pulse of the FREQUENCY signal is counted exactly once.
-             * Includes safety timeout to prevent infinite hangs.
-             */
+            // Sync: Wait for signal to return HIGH to avoid double counting
+            // decrement detectionWindow to prevent infinite hangs if signal is stuck LOW
             while (!gpio_get(PIN_WFCK) && detectionWindow > 0) {
                 detectionWindow--;
-                if(detectionWindow == 0) {
-                SetLEDDynamic(LED_MAGENTA, 100);
-                return;            // Exit as soon as we are sure
             }
         }
     }
-  }
-  // Cleanup pulls if window expires (Legacy mode)
-  gpio_disable_pulls(PIN_WFCK);
+    
+    // --- Final Diagnosis ---
+    // If the window expired and we saw little to no activity while signal is LOW
+    if (detectionWindow == 0 && pulse_hits > 15) {
+        if (!gpio_get(PIN_WFCK)) {
+            wfck_mode = 2;              // Confirmed: Mode 2 (Error - Stuck at Ground)
+            
+            // Visual Error feedback: Blinking Blue (per user preference)
+            for(int i=0; i<3; i++) {
+                SetLEDDynamic(LED_BLUE, 100);
+                sleep_ms(100);
+                SetLEDDynamic(0, 0); 
+                sleep_ms(100);
+            }
+            SetLEDDynamic(LED_BLUE, 100); // Laisse allumé en rouge à la fin
+        }
+    }
 
-  // If the window expires without seeing enough LOW pulses, it remains wfck_mode = 0 (GATE)
-  #if defined(DEBUG_SERIAL_MONITOR)
-    BoardDetectionLog(detectionWindow, wfck_mode, INJECT_SCEx);
-  #endif
-  
+    // // Set LED to Magenta if we remain in Mode 0 (Legacy/High)
+    if (wfck_mode == 0) {
+        SetLEDDynamic(LED_MAGENTA, 100);
+    }
+
+    gpio_disable_pulls(PIN_WFCK);
+
+    #if defined(DEBUG_SERIAL_MONITOR)
+        BoardDetectionLog(detectionWindow, wfck_mode, INJECT_SCEx);
+    #endif
 }
+
 
 /******************************************************************************************************************
  * FUNCTION    : CaptureSUBQ
@@ -657,8 +713,9 @@ void Init() {
 
 int main() {
     stdio_init_all();
+    init_pio_debug();
     Init();
-
+    printf("test");
     // --- Critical Boot Patching ---
     #ifdef BIOS_PATCH
         // Execute BIOS patching sequence

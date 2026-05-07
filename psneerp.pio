@@ -5,15 +5,13 @@
 .program uart_tx
 .side_set 1 opt
 
-; Programme UART TX simple
-; Pin de sortie configurée en side-set
 public entry:
-    out x, 1            side 0 [6] ; Start bit
-    set y, 7                       ; 8 bits de données
+    pull block          side 1      ; Repos (ligne à 1)
+    set x, 7            side 0 [6]  ; Start bit : 1 (set) + 6 (delay) + 1 (prochaine instruction) = 8 cycles
 bitloop:
-    out x, 1            side 1 [6] ; Envoie 1 bit
-    jmp y-- bitloop                ; Boucle pour les 8 bits
-    nop                 side 1 [6] ; Stop bit
+    out pins, 1                [6]  ; Data bit : 1 (out) + 6 (delay) + 1 (prochaine instruction) = 8 cycles
+    jmp x-- bitloop                 ; Boucle : dure 1 cycle
+    nop                 side 1 [7]  ; Stop bit : 1 (nop) + 7 (delay) = 8 cycles
 
 
 ; =============================================================================
@@ -123,19 +121,28 @@ force_wrap:                 ; <-- L'étiquette pointe sur une instruction
 
 // 1. UART TX Initialization
 static inline void uart_tx_program_init(PIO pio, uint sm, uint offset, uint pin, uint baud) {
-    pio_sm_set_pins_with_mask(pio, sm, 1u << pin, 1u << pin);
-    pio_sm_set_pindirs_with_mask(pio, sm, 1u << pin, 1u << pin);
     pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true); // Pin en sortie
+
     pio_sm_config c = uart_tx_program_get_default_config(offset);
+    
+    // Configurer la pin pour OUT et SIDE-SET
     sm_config_set_out_pins(&c, pin, 1);
     sm_config_set_sideset_pins(&c, pin);
-    sm_config_set_out_shift(&c, true, false, 32);
+
+    // UART standard : Droite (true), Autopull activé (true), Seuil 8 bits
+    sm_config_set_out_shift(&c, true, true, 8); 
+    
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    // 8 cycles par bit (selon les [7] et [6] dans le code PIO)
     float div = (float)clock_get_hz(clk_sys) / (8 * baud);
     sm_config_set_clkdiv(&c, div);
+
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);
 }
+
 
 // 2. WS2812 LED Initialization
 static inline void ws2812_program_init(PIO pio, uint sm, uint offset, uint pin, float freq, bool rgbw) {
@@ -183,7 +190,7 @@ static inline void bios_patch_switch_source(PIO pio, uint sm, uint pin) {
     pio_gpio_init(pio, pin);
     pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false); // Set pin as Input
     
-    pio_sm_config c = pio_sm_get_config(pio, sm);
+    pio_sm_config c = pio_get_default_sm_config();
     sm_config_set_in_pins(&c, pin);
     pio_sm_set_config(pio, sm, &c);
 }
