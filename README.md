@@ -1,4 +1,5 @@
 # PSNEERP
+# The project is in alpha stage and is not yet functional.
 PSNEERP is compatible with all retail PlayStation 1 models and various AVR microcontrollers.   
 
 ## It runs under VS Code; it's the only platform that natively supports PIOs.
