@@ -105,62 +105,9 @@ volatile uint32_t request_counter = 0;
 #          UART 
 *********************************************************************************************************************/
 
-#include "psneerp.pio.h"
-#include "hardware/clocks.h"
-#include "pico/stdio/driver.h" // Nécessaire pour le driver personnalisé
+#include "pico/stdio_uart.h"
 
-static uint sm_debug; 
 
-// --- 1. Définition du Driver pour printf ---
-
-static void stdio_pio_out_chars(const char *buf, int len) {
-    for (int i = 0; i < len; i++) {
-        // On utilise votre fonction pio_putc existante
-        pio_sm_put_blocking(pio1, sm_debug, (uint32_t)buf[i]);
-    }
-}
-
-// Structure du driver
-static stdio_driver_t stdio_pio_debug = {
-    .out_chars = stdio_pio_out_chars,
-    .crlf_enabled = true // Gère automatiquement les \n -> \r\n
-};
-
-// --- 2. Fonctions d'envoi manuelles ---
-
-void pio_putc(char c) {
-    pio_sm_put_blocking(pio1, sm_debug, (uint32_t)c);
-}
-
-void pio_puts(const char *s) {
-    while (*s) pio_putc(*s++);
-}
-
-// --- 3. Initialisation complète ---
-
-void init_pio_debug() {
-    // Initialisation du PIO (votre code existant)
-    uint offset = pio_add_program(pio1, &uart_tx_program);  
-    sm_debug = pio_claim_unused_sm(pio1, true);
-    
-    pio_gpio_init(pio1, PIN_DEBUG_TX);
-    pio_sm_set_consecutive_pindirs(pio1, sm_debug, PIN_DEBUG_TX, 1, true);
-
-    pio_sm_config c = uart_tx_program_get_default_config(offset);
-    sm_config_set_out_pins(&c, PIN_DEBUG_TX, 1);
-    sm_config_set_sideset_pins(&c, PIN_DEBUG_TX);
-
-    sm_config_set_out_shift(&c, true, true, 8);
-    
-    float div = (float)clock_get_hz(clk_sys) / (8 * 115200);
-    sm_config_set_clkdiv(&c, div);
-
-    pio_sm_init(pio1, sm_debug, offset, &c);
-    pio_sm_set_enabled(pio1, sm_debug, true);
-
-    // --- ACTIVATION DU PRINTF SUR PIO ---
-    stdio_set_driver_enabled(&stdio_pio_debug, true);
-}
 
 
 
@@ -708,14 +655,16 @@ void Init() {
     
     // Initial visual feedback: Dim White (System Ready)
     SetLEDDynamic(LED_WHITE, 50);
+
+    stdio_uart_init_full(uart1, 115200, 8, -1);
 }
 
 
 int main() {
     stdio_init_all();
-    init_pio_debug();
+    init_debug();
     Init();
-    printf("test");
+
     // --- Critical Boot Patching ---
     #ifdef BIOS_PATCH
         // Execute BIOS patching sequence

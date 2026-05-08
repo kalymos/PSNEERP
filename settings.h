@@ -108,37 +108,38 @@
 ------------------------------------------------------------------------------------------------*/
 
 #if defined(DEBUG_SERIAL_MONITOR)
-  #include "hardware/clocks.h"
+#include "hardware/clocks.h"
+#include <stdio.h>
 
-
-// Variable externe
+// External request counter for SUB-Q tracking
 extern volatile uint32_t request_counter;
 
 void BoardDetectionLog(uint32_t window_result, uint8_t Wfck_mode, uint8_t region) {
     static const char* regionNames[] = {"NTSC-J", "NTSC-U/C", "PAL", "Universal"};
+    static const char* modeNames[]   = {"LEGACY (High)", "FREQ (Oscillating)", "ERROR (Stuck Low)"};
 
-    // Le \n sera transformé en \r\n automatiquement par le driver
     printf("\n--- Board Detection ---\n");
-    printf(" CPU Speed: %lu MHz\n", clock_get_hz(clk_sys) / 1000000L);
-    printf(" Sync Window: %u\n", (unsigned int)window_result); 
-    printf(" WFCK Mode: %u\n", Wfck_mode);
-    printf(" Region ID: %s\n", (region < 4) ? regionNames[region] : "Unknown");
+    printf(" CPU Speed  : %lu MHz\n", clock_get_hz(clk_sys) / 1000000L);
+    printf(" Sync Window: %lu\n", window_result); 
+    printf(" WFCK Mode  : %u (%s)\n", Wfck_mode, (Wfck_mode < 3) ? modeNames[Wfck_mode] : "Unknown");
+    printf(" Region ID  : %s\n", (region < 4) ? regionNames[region] : "Unknown");
     printf("-----------------------\n\n");
 }
 
 void CaptureSUBQLog(uint32_t *dataBuffer32) {
-    static uint32_t errorCount = 0;
+    // Basic null check to avoid crashes
+    if (!dataBuffer32) return;
 
+    // Error filtering: check if all 96 bits are zero
     if (dataBuffer32[0] == 0 && dataBuffer32[1] == 0 && dataBuffer32[2] == 0) {
-        errorCount++;
-        // Optionnel : printf("E"); // Affiche un 'E' pour chaque erreur Sub-Q
+        // You could add a printf("E") here to see silent errors
         return;
     }
 
-    // Affichage Hexadécimal optimisé
-    // On affiche l'index de la requête pour suivre le flux
+    // Display current request index
     printf("[%lu] ", request_counter);
 
+    // Display 12 bytes (3 words) in Hexadecimal (LSB first)
     for (uint8_t i = 0; i < 3; i++) {
         uint32_t word = dataBuffer32[i];
         printf("%02X %02X %02X %02X ", 
@@ -153,7 +154,6 @@ void CaptureSUBQLog(uint32_t *dataBuffer32) {
 void InjectLog() {     
     printf(" >> INJECT!\n");
 }
-
 
 #endif
 

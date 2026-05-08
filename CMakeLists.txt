@@ -54,6 +54,7 @@ target_link_libraries(PSNEERP
     pico_multicore
     hardware_pio      # <--- AJOUTE ÇA (pour hardware/pio.h)
     hardware_clocks   # <--- AJOUTE ÇA (pour clock_get_hz)
+    hardware_uart 
 )
 
 # Add the standard include files to the build
@@ -63,6 +64,10 @@ target_include_directories(PSNEERP PRIVATE
 
 pico_add_extra_outputs(PSNEERP)
 
-add_compile_options(-fdiagnostics-color=always)
+
+
+# Active l'UART et désactive l'USB pour stdio
+pico_enable_stdio_uart(PSNEERP 1)
+pico_enable_stdio_usb(PSNEERP 0)
 
 
