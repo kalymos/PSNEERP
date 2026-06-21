@@ -1,5 +1,22 @@
 # PSNEERP
 # The project is in alpha stage and is not yet functional.
+
+
+
+| Feature / Task | Status |
+| :--- | :--- |
+| LED | OK |
+| Serial port | OK |
+| Card detection | OK |
+| SUBQ reading | In progress |
+| SUBQ filter | In progress |
+| Region code injection | To do |
+| BIOS patch | To do |
+| CMake | To clean up / To do* |
+
+*\*Note: If anyone wants to take over the CMake cleanup, help is welcome!*
+
+
 PSNEERP is compatible with all retail PlayStation 1 models and various AVR microcontrollers.   
 
 ## It runs under VS Code; it's the only platform that natively supports PIOs.
