@@ -1,46 +1,35 @@
 {
-    "cmake.showSystemKits": false,
-    "cmake.options.statusBarVisibility": "hidden",
-    "cmake.options.advanced": {
-        "build": {
-            "statusBarVisibility": "hidden"
-        },
-        "launch": {
-            "statusBarVisibility": "hidden"
-        },
-        "debug": {
-            "statusBarVisibility": "hidden"
-        },
-        "variant": {
-            "statusBarVisibility": "hidden",
-        },
-        "buildTarget": {
-            "statusBarVisibility": "hidden",
-        }
+    // 1. Force l'injection des variables d'environnement directement dans CMake Tools (Universel)
+    "cmake.configureEnvironment": {
+        "PICO_TOOLCHAIN_PATH": "${userHome}/.pico-sdk/toolchain/14_2_Rel1"
     },
-    "cmake.configureOnEdit": false,
-    "cmake.automaticReconfigure": false,
-    "cmake.configureOnOpen": false,
+
+    // 2. Configuration globale des outils
     "cmake.generator": "Ninja",
-    "cmake.cmakePath": "${userHome}/.pico-sdk/cmake/v3.31.5/bin/cmake",
+    "cmake.cmakePath": "cmake",
+    "raspberry-pi-pico.useCmakeTools": true,
+    "raspberry-pi-pico.cmakeAutoConfigure": true,
     "C_Cpp.debugShortcut": false,
+    "raspberry-pi-pico.ninjaPath": "ninja",
+    "cmake.options.statusBarVisibility": "visible",
+    "cmake.showSystemKits": true,
+
+    // 3. Configuration des terminaux
     "terminal.integrated.env.windows": {
-        "PICO_SDK_PATH": "${env:USERPROFILE}/.pico-sdk/sdk/2.2.0",
-        "PICO_TOOLCHAIN_PATH": "${env:USERPROFILE}/.pico-sdk/toolchain/14_2_Rel1",
-        "Path": "${env:USERPROFILE}/.pico-sdk/toolchain/14_2_Rel1/bin;${env:USERPROFILE}/.pico-sdk/picotool/2.2.0-a4/picotool;${env:USERPROFILE}/.pico-sdk/cmake/v3.31.5/bin;${env:USERPROFILE}/.pico-sdk/ninja/v1.12.1;${env:PATH}"
+        "PICO_SDK_PATH": "${userHome}/.pico-sdk/sdk/2.2.0",
+        "PICO_TOOLCHAIN_PATH": "${userHome}/.pico-sdk/toolchain/14_2_Rel1",
+        "Path": "${userHome}/.pico-sdk/toolchain/14_2_Rel1/bin;${userHome}/.pico-sdk/picotool/2.2.0-a4/picotool;${userHome}/.pico-sdk/ninja/v1.12.1;${env:Path}"
     },
     "terminal.integrated.env.osx": {
-        "PICO_SDK_PATH": "${env:HOME}/.pico-sdk/sdk/2.2.0",
-        "PICO_TOOLCHAIN_PATH": "${env:HOME}/.pico-sdk/toolchain/14_2_Rel1",
-        "PATH": "${env:HOME}/.pico-sdk/toolchain/14_2_Rel1/bin:${env:HOME}/.pico-sdk/picotool/2.2.0-a4/picotool:${env:HOME}/.pico-sdk/cmake/v3.31.5/bin:${env:HOME}/.pico-sdk/ninja/v1.12.1:${env:PATH}"
+        "PICO_SDK_PATH": "${userHome}/.pico-sdk/sdk/2.2.0",
+        "PICO_TOOLCHAIN_PATH": "${userHome}/.pico-sdk/toolchain/14_2_Rel1",
+        "PATH": "/usr/local/bin:/usr/bin:${userHome}/.pico-sdk/toolchain/14_2_Rel1/bin:${userHome}/.pico-sdk/picotool/2.2.0-a4/picotool:${userHome}/.pico-sdk/ninja/v1.12.1:${env:PATH}"
     },
-    "terminal.integrated.env.linux": {
-        "PICO_SDK_PATH": "${env:HOME}/.pico-sdk/sdk/2.2.0",
-        "PICO_TOOLCHAIN_PATH": "${env:HOME}/.pico-sdk/toolchain/14_2_Rel1",
-        "PATH": "${env:HOME}/.pico-sdk/toolchain/14_2_Rel1/bin:${env:HOME}/.pico-sdk/picotool/2.2.0-a4/picotool:${env:HOME}/.pico-sdk/cmake/v3.31.5/bin:${env:HOME}/.pico-sdk/ninja/v1.12.1:${env:PATH}"
-    },
-    "raspberry-pi-pico.cmakeAutoConfigure": true,
-    "raspberry-pi-pico.useCmakeTools": false,
-    "raspberry-pi-pico.cmakePath": "${HOME}/.pico-sdk/cmake/v3.31.5/bin/cmake",
-    "raspberry-pi-pico.ninjaPath": "${HOME}/.pico-sdk/ninja/v1.12.1/ninja"
+        "terminal.integrated.env.linux": {
+        "PICO_SDK_PATH": "${userHome}/.pico-sdk/sdk/2.2.0",
+        "PATH": "/usr/local/bin:/usr/bin:${userHome}/.pico-sdk/picotool/2.2.0-a4/picotool:${env:PATH}"
+    }
+
 }
+
+

@@ -8,8 +8,8 @@
  *
  *  SCPH model number //  region code | region
  *--------------------------------------------------------------------------------------------------------------------*/
- #define SCPH_xxx1  //  NTSC U/C    | America.
-// #define SCPH_xxx2  //  PAL         | Europ.
+// #define SCPH_xxx1  //  NTSC U/C    | America.
+ #define SCPH_xxx2  //  PAL         | Europ.
 // #define SCPH_xxx3  //  NTSC J      | Asia.
 // #define SCPH_xxxx  //  Universal
 
@@ -86,13 +86,44 @@
 #include "MCU.h"
 #include "settings.h"
 #include "psneerp.pio.h"
+#include "pico/multicore.h"
+#include "pico/stdlib.h"
+#include "hardware/pio.h"
 
 uint offsetPATCH;  
 
-volatile int wfck_mode = 0;  //Flag initializing for automatic console generation selection 0 = old, 1 = pu-22 end  ++
-volatile uint32_t SUBQBuffer32[3]; // Global buffer to store the 12-byte SUBQ channel data
 
+// --- PROTOTYPES DES FONCTIONS ---
+// --- PROTOTYPES DES FONCTIONS ---
+void BoardDetection(void); // Votre fonction principale de détection (sans paramètre)
+void BoardDetectionLog(uint32_t window, uint8_t mode, uint32_t inject); // La vraie fonction de log à 3 paramètres
+void CaptureSUBQ(void);
+void FilterSUBQSamples(void);
+void CaptureSUBQLog(bool crc_valid);
+
+
+// --- VARIABLES GLOBALES DU PIPELINE SUBQ (SANS DOUBLONS) ---
+volatile uint32_t SUBQBuffer[3] = {0, 0, 0}; 
+#define SUBQBuffer32 SUBQBuffer
+
+volatile uint32_t last_pulse_time = 0;
+volatile bool pio_glitch_detected = false;
+
+// Note : wfck_mode et request_counter sont déjà définis aux lignes 108/109.
+// Ne rajoutez aucune autre ligne les mentionnant ici pour éviter les "redefinition of".
+
+// INSTANCES MATÉRIELLES RP2040
+PIO pio = pio0;
+uint sm = 0;
+
+
+// --- CONFIGURATION DU SIGNAL HORLOGE ---
+volatile uint8_t wfck_mode = 0; // 0 = Standard / Détection automatique
+
+// Variables de contrôle d'injection d'origine
 volatile uint32_t request_counter = 0;
+
+
 
  #if defined(DEBUG_SERIAL_MONITOR)
    uint16_t global_window = 0; // Stores the remaining cycles from the detection window
@@ -107,7 +138,8 @@ volatile uint32_t request_counter = 0;
 
 #include "pico/stdio_uart.h"
 
-
+#include "pico/stdlib.h"
+#include "hardware/pio.h"
 
 
 
@@ -332,7 +364,7 @@ void Bios_Patching(void) {
  *
  *******************************************************************************************************************/
 
-void BoardDetection() {
+void BoardDetection(void) {
     
     wfck_mode = 0;                    // Default: Mode 0 (Legacy/GATE)
     uint8_t pulse_hits = 25;          // Required oscillations to confirm Mode 1 (Frequency)
@@ -387,7 +419,7 @@ void BoardDetection() {
         SetLEDDynamic(LED_MAGENTA, 100);
     }
 
-    gpio_disable_pulls(PIN_WFCK);
+    //gpio_disable_pulls(PIN_WFCK);
 
     #if defined(DEBUG_SERIAL_MONITOR)
         BoardDetectionLog(detectionWindow, wfck_mode, INJECT_SCEx);
@@ -406,137 +438,140 @@ void BoardDetection() {
  * IMPLEMENTATION: 
  *    Uses 32-bit words for efficiency. Synchronous Serial, LSB first.
  ******************************************************************************************************************/
-
-PIO pioSUBQ = pio0;       // PIO Block Instance (pio0 or pio1)
-uint smSUBQ = 0;          // State Machine Index (0 to 3)
-uint offsetSUBQ;          // Program offset in PIO instruction memory
-
-/**
- * Capture Function: Retrieves 96 bits of data from the PIO FIFO
- */
+PIO pioSUBQ = pio0;         // Instance PIO (pio0 ou pio1)
+uint smSUBQ = 0;            // Index de la State Machine (0 à 3)
+uint offsetSUBQ;            // Offset du programme dans la mémoire PIO
 void CaptureSUBQ(void) {
-    // Clear FIFOs and ISR to ensure we start with fresh data
-    pio_sm_clear_fifos(pioSUBQ, smSUBQ);
-    pio_sm_exec(pioSUBQ, smSUBQ, pio_encode_mov(pio_isr, pio_null));
+    uint32_t now = time_us_32(); 
 
-    // Direct capture of 3 words (32-bit each), total 96 bits
-    for (int i = 0; i < 3; i++) {
-        SUBQBuffer32[i] = pio_sm_get_blocking(pioSUBQ, smSUBQ);
+    // --- STEP 1: TIMEOUT VALIDATION ---
+    if (now - last_pulse_time > 1500 && last_pulse_time != 0) {
+        last_pulse_time = 0;
+        pio_sm_exec(pioSUBQ, smSUBQ, pio_encode_push(false, true)); 
+        sleep_us(2);
+        
+        if (pio_sm_get_rx_fifo_level(pioSUBQ, smSUBQ) < 3) {
+            pio_sm_clear_fifos(pioSUBQ, smSUBQ); 
+            return; 
+        }
     }
 
+    // --- STEP 2: SIGNAL GLITCH FLUSH ---
+    if (pio_glitch_detected) {
+        pio_glitch_detected = false;
+        last_pulse_time = 0;
+        SUBQBuffer[0] = 0; SUBQBuffer[1] = 0; SUBQBuffer[2] = 0;
+        pio_sm_restart(pioSUBQ, smSUBQ); 
+        pio_sm_clear_fifos(pioSUBQ, smSUBQ);
+        return;
+    }
+
+    // --- STEP 3: FIFO CHECK (ZÉRO ATTENTE BLOQUANTE) ---
+    if (pio_sm_get_rx_fifo_level(pioSUBQ, smSUBQ) < 3) {
+        return; 
+    }
+
+    last_pulse_time = now; 
+
+    uint32_t local_raw[3];
+    local_raw[0] = pio_sm_get(pioSUBQ, smSUBQ);
+    local_raw[1] = pio_sm_get(pioSUBQ, smSUBQ);
+    local_raw[2] = pio_sm_get(pioSUBQ, smSUBQ);
+
+    if (local_raw[0] == 0 && local_raw[1] == 0 && local_raw[2] == 0) {
+        pio_sm_clear_fifos(pioSUBQ, smSUBQ);
+        return;
+    }
+
+    // --- STEP 4: REDRESSEMENT RAPIDE DES OCTETS ---
+    uint8_t clean[12];
+    for (int i = 0; i < 12; i++) {
+        uint8_t b = (local_raw[i >> 2] >> (24 - ((i & 3) * 8))) & 0xFF;
+        b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+        b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+        b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+        clean[i] = b;
+    }
+
+    // --- STEP 5: FILTRE ANTI-FREEZE SÉCURISÉ ---
+    // On n'active 'crc_valid' que si la trame est une trame de position standard (ADR == 1)
+    // ET que le numéro de piste est cohérent (inférieur à 100). On rejette les trames instables 
+    // comme le mode 3 ou les valeurs aberrantes (0xAA) qui font planter FilterSUBQSamples.
+    uint8_t adr = clean[0] & 0x0F;
+    uint8_t track = clean[1];
+    
+    bool crc_valid = (adr == 0x01) && (track < 100);
+
+    // --- STEP 6: ALIMENTATION DU BUFFER GLOBAL ---
+    SUBQBuffer[0] = (clean[0] << 24) | (clean[1] << 16) | (clean[2] << 8) | clean[3];
+    SUBQBuffer[1] = (clean[4] << 24) | (clean[5] << 16) | (clean[6] << 8) | clean[7];
+    SUBQBuffer[2] = (clean[8] << 24) | (clean[9] << 16) | (clean[10] << 8) | clean[11];
+
     #if defined(DEBUG_SERIAL_MONITOR)
-        CaptureSUBQLog((uint32_t*)SUBQBuffer32);
+      CaptureSUBQLog(crc_valid);
     #endif
+
+    // Si la trame n'est pas parfaitement stable, on ne la transmet JAMAIS 
+    // au reste du firmware principal pour éviter de faire freezer la console.
+    if (!crc_valid) {
+        pio_sm_clear_fifos(pioSUBQ, smSUBQ); 
+        return; 
+    }
 }
 
 
-/******************************************************************************************
- * FUNCTION    : Filter_SUBQ_Samples() [SCPH_5903 Dual-Interface Variant]
- * 
- * DESCRIPTION : 
- *    Parses and filters the raw serial data stream from the SUBQ pin specifically 
- *    for the SCPH-5903 model to differentiate between Game Discs and Video CDs (VCD).
- * 
- *    1. VCD EXCLUSION: Specifically filters out VCD Lead-In patterns (sub-mode 0x02) 
- *       to prevent incorrect region injection on non-game media.
- *    2. SUBQ HIT COUNTING: Increments 'request_counter' for valid PlayStation TOC (A0-A2) 
- *       markers or active game tracking.
- *    3. SIGNAL DECAY: Decrements the counter when SUBQ samples match VCD patterns 
- *       or unknown data, ensuring stable disc identification.
- * 
- * INPUT       : isDataSector (bool) - Filtered flag based on raw sector control bits.
- ******************************************************************************************/
-#ifdef SCPH_5903
-
-  void FilterSUBQSamples(uint8_t controlByte) {
-      
-      // --- STEP 0: Data/TOC Validation ---
-      // Optimized mask (0xD0) to verify bit6 is SET while bit7 and bit4 are CLEARED.
-      uint8_t isDataSector = ((controlByte & 0xD0) == 0x40);
-
-      // --- STEP 1: SUBQ Frame Synchronization ---
-      // Fast filtering: ignore raw data if sync markers (index 1 and 6) are not 0x00.
-      if (SUBQBuffer[1] == 0x00 && SUBQBuffer[6] == 0x00) {
-
-          /** 
-          * HIT INCREMENT CONDITIONS:
-          * A. VALID PSX LEAD-IN: Data sector AND Point A0-A2 range AND NOT VCD (sub-mode != 0x02).
-          *    (uint8_t)(SUBQBuffer[2] - 0xA0) <= 2 is an optimized check for 0xA0, 0xA1, 0xA2.
-          * B. TRACKING MAINTENANCE: Keeps count if already synced and reading Mode 0x01 or Data.
-          */
-          if ( (isDataSector && (uint8_t)(SUBQBuffer[2] - 0xA0) <= 2 && SUBQBuffer[3] != 0x02) ||
-              (request_counter > 0 && (SUBQBuffer[0] == 0x01 || isDataSector)) ) 
-          {
-              request_counter++; // Direct increment: faster on 16MHz AVR
-              return;
-          }
-      }
-
-      // --- STEP 2: Signal Decay / Pattern Mismatch ---
-      // Decrement the hit counter if no valid PSX pattern is detected in the SUBQ stream.
-      if (request_counter > 0) {
-          request_counter--; // Direct decrement: saves CPU cycles
-      }
-  }
-#else
 
 /******************************************************************************************
- * FUNCTION    : FilterSUBQSamples()
- * 
- * DESCRIPTION : 
- *    Parses and filters the raw serial data stream from the SUBQ buffer.
- *    Increments a hit counter (request_counter) when specific patterns are identified,
- *    confirming the laser is reading the region-check (Lead-in) area.
- * 
- * LOGIC:
- *    1. RAW BUS FILTERING: Validates SUBQ framing by checking sync markers (Byte 1 & 6).
- *    2. SECTOR ANALYSIS: Filters based on Control/ADR bits (Byte 0).
- *    3. PATTERN MATCHING: Detects Lead-In TOC (A0-A2) or Track 01 at the spiral start.
- *    4. SIGNAL DECAY: Decrements the counter if the sample is invalid or mismatched.
+ * FUNCTION    : FilterSUBQSamples
+ * DESCRIPTION : Decodes, parses, and validates the incoming SQSO (Subcode Q Serial Output) 
+ *               serial bitstream perfectly aligned by the hardware PIO engine.
  ******************************************************************************************/
-
 void FilterSUBQSamples(void) {
-    // Load the first two 32-bit words for fast parsing
-    uint32_t word0 = SUBQBuffer32[0]; // Bytes 0, 1, 2, 3
-    uint32_t word1 = SUBQBuffer32[1]; // Bytes 4, 5, 6, 7
-    
-    // --- STEP 1: Control Byte Validation (Byte 0) ---
-    // Isolate Control bits and check for Data Sector (0x40) using mask (0xD0)
-    bool isDataSector = ((word0 & 0xD0) == 0x40);
 
-    // --- STEP 2: Sync Check (Simultaneous check for Byte 1 and Byte 6) ---
-    // Verifies that Byte 1 (bits 8-15 of word0) AND Byte 6 (bits 16-23 of word1) are zero
-    if (!((word0 & 0xFF00) | (word1 & 0xFF0000))) {
+    // --- STEP 1: SUBQ Frame Track & Hardware Spacer Gatekeeper ---
+    // TRACK/TNO occupe les bits 23-16 de SUBQBuffer[0] (Masque 0x00FF0000)
+    // ZERO hardware spacer occupe les bits 15-8 de SUBQBuffer[1] (Masque 0x0000FF00)
+    if ((SUBQBuffer[0] & 0x00FF0000) == 0x00000000 && (SUBQBuffer[1] & 0x0000FF00) == 0x00000000) {
 
-        // Extract Track (Byte 2) and Index (Byte 3) using bit shifts
-        uint8_t track = (uint8_t)((word0 >> 16) & 0xFF); 
-        uint8_t index = (uint8_t)((word0 >> 24) & 0xFF); 
+        #ifdef SCPH_5903
+        // Multimedia VCD discrimination check : MIN occupe désormais les bits 7-0 de SUBQBuffer[0]
+        if ((SUBQBuffer[0] & 0x000000FF) == 0x02) {
+            if (request_counter > 0) request_counter--;
+            return;
+        }
+        #endif
 
-        // Condition A: Lead-in / Track 01 Detection
-        bool conditionA = (isDataSector && (track >= 0xA0 || 
-                          (track == 0x01 && ((uint8_t)(index - 0x03) >= 0xF5))));
+        // --- STEP 2: Fully-Condensed 32-Bit Evaluation Matrix ---
+        // Équivalences des champs alignés par le PIO dans SUBQBuffer[0] :
+        // - CTRL/ADR       = (SUBQBuffer[0] >> 24) & 0xFF  (Bits 31-24)
+        // - INDEX / POINT  = (SUBQBuffer[0] >> 8) & 0xFF   (Bits 15-8)
+        // SEC (Seconds) se trouve dans les bits 31-24 de SUBQBuffer[1] -> (SUBQBuffer[1] >> 24) & 0xFF
         
-        // Condition B: Tracking Lock Persistence
-        // (word0 & 0xFF) isolates Byte 0 (Control/ADR)
-        bool conditionB = (request_counter > 0 && ((word0 & 0xFF) == 0x01 || isDataSector));
-
-        if (conditionA || conditionB) {
-            // Pattern matched: increment counter and update LED
-            request_counter++;
-            SetLEDDynamic(LED_GREEN, request_counter * 7);
+        if (
+            // Condition A : Mode TOC / Secteur de données valide
+            ((((SUBQBuffer[0] >> 24) & 0x40) == 0x40) && // Bit 6 de CTRL est SET (Data Sector)
+             ((((uint8_t)(SUBQBuffer[0] >> 8) - 0xA0) <= 2) || // INDEX est entre 0xA0 et 0xA2 (TOC Pointers)
+              (((SUBQBuffer[0] >> 8) & 0xFF) == 0x01 && ((((SUBQBuffer[1] >> 24) - 3) & 0xFF) >= 0xF5)))) // Ou Index == 01h et SEC sous-flow (00:00:00 à 00:02:00)
+            
+            || 
+            
+            // Condition B : Maintien de l'accumulation (Hystérésis active)
+            (request_counter > 0 && 
+             ((((SUBQBuffer[0] >> 24) & 0x0F) == 0x01) || // ADR == 1 (Position data)
+              (((SUBQBuffer[0] >> 24) & 0x40) == 0x40)))  // Ou bit de contrôle DATA activé
+           ) 
+        {
+            request_counter++; 
             return;
         }
     }
 
-    // --- STEP 3: Signal Decay ---
-    // Decrement counter if the signal is lost or invalid to prevent false triggers
+    // --- STEP 3: Hysteresis Signal Decay Loop Step ---
     if (request_counter > 0) {
-        request_counter--;
-        SetLEDDynamic(LED_GREEN, request_counter * 7);
+        request_counter--; 
     }
 }
 
- #endif
 /*********************************************************************************************
  * FUNCTION    : PerformInjectionSequence
  * 
@@ -648,9 +683,10 @@ void Init() {
     #endif
 
     // 3. PIO Program Loading for SUBQ Capture
-    offsetSUBQ = pio_add_program(pioSUBQ, &subq_capture_program);
+   offsetSUBQ = pio_add_program(pioSUBQ, &subq_capture_program);
     
     // Initialize SUBQ state machine with explicit global variables
+    
     subq_capture_program_init(pioSUBQ, smSUBQ, offsetSUBQ, PIN_SUBQ, PIN_SQCK);
     
     // Initial visual feedback: Dim White (System Ready)
@@ -662,7 +698,7 @@ void Init() {
 
 int main() {
     stdio_init_all();
-    init_debug();
+    //init_debug();
     Init();
 
     // --- Critical Boot Patching ---
@@ -678,10 +714,14 @@ int main() {
     //     // Display initial board detection results (Window remaining & WFCK mode)
     //     BoardDetectionLog(global_window, wfck_mode, INJECT_SCEx);
     // #endif
-
+    pio_sm_set_enabled(pioSUBQ, smSUBQ, false);  // Coupe le PIO
+    pio_sm_clear_fifos(pioSUBQ, smSUBQ);          // Supprime les octets parasites du boot
+    pio_sm_restart(pioSUBQ, smSUBQ);              // Reset les compteurs de bits internes
+    pio_sm_set_enabled(pioSUBQ, smSUBQ, true);   // Relance le PIO propre pour le direct
+    
     while (true) {
         // Timing Sync: Prevent reading the tail end of the previous SUBQ packet
-        sleep_ms(1);        
+        //sleep_ms(1);        
 
         // DATA ACQUISITION: Capture the 12-byte SUBQ stream
         CaptureSUBQ();       

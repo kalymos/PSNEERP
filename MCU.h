@@ -30,10 +30,11 @@
       
 
 // Define pin numbers for the RP2040 - adjust these to match your wiring
-#define PIN_DATA                    2    // GP2
-#define PIN_WFCK                    3    // GP3
-#define PIN_SQCK                    4    // GP4  
-#define PIN_SUBQ                    5    // GP5
+#define PIN_SQCK                    3   
+#define PIN_SUBQ                    4   
+#define PIN_DATA                    5   
+#define PIN_WFCK                    6   
+
 
 
 
@@ -47,9 +48,9 @@
       defined(SCPH_3000)      || \
       defined(SCPH_1000)
 
-      #define PIN_AX                      6    // GP6
-      #define PIN_AY                      7    // GP7
-      #define PIN_DX                      8    // GP8
+      #define PIN_AX                      0    // GP6
+      #define PIN_AY                      1    // GP7
+      #define PIN_DX                      2    // GP8
 
     // --- Switch de désactivation (Bypass) ---
     #ifdef PATCH_SWITCHE

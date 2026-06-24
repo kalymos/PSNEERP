@@ -68,16 +68,22 @@ loop_override:
 ; =============================================================================
 ; 4. CAPTURE SUBQ (Synchronisation sur SQCK pour lire SUBQ)
 ; =============================================================================
+
 .program subq_capture
-; Pin 0 (IN) : SUBQ
-; Pin 1 (IN) : SQCK
+
 .wrap_target
-    wait 0 pin 1    ; Attend front descendant SQCK
-    wait 1 pin 1    ; Attend front montant SQCK
-    in pins, 1      ; Échantillonne SUBQ vers ISR
+start_sector:
+    wait 0 gpio 3        
+    wait 1 gpio 3        
+    wait 0 gpio 3        
+    wait 1 gpio 3        
+
+capture_loop:
+    wait 0 gpio 3        
+    wait 1 gpio 3        
+    in pins, 1           
+    jmp capture_loop     
 .wrap
-
-
 ; =============================================================================
 ; 5. INJECTION SCEx (Modulation DATA basée sur WFCK)
 ; =============================================================================
@@ -200,21 +206,24 @@ static inline void bios_patch_switch_source(PIO pio, uint sm, uint pin) {
 static inline void subq_capture_program_init(PIO pio, uint sm, uint offset, uint pin_subq, uint pin_sqck) {
     pio_sm_config c = subq_capture_program_get_default_config(offset);
     
-    // Set input pins: PIO reads pin_subq and synchronizes on pin_sqck
-    sm_config_set_in_pins(&c, pin_subq);
+    sm_config_set_in_pins(&c, pin_subq);  
     
-    // Configuration: Shift Right (LSB first), Autopush ENABLED, Threshold 32 bits
-    sm_config_set_in_shift(&c, true, true, 32);
+    // CORRECTIF : false = Shift-Left (MSB-First) pour aligner l'ordre des octets natifs
+    sm_config_set_in_shift(&c, false, true, 32); 
     
-    // Initialize GPIOs for PIO usage
+    sm_config_set_clkdiv(&c, 1.0f);
+
     pio_gpio_init(pio, pin_subq);
     pio_gpio_init(pio, pin_sqck);
+    gpio_pull_up(pin_subq);
+    gpio_pull_up(pin_sqck);
     
-    // Apply configuration and enable State Machine
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_subq, 1, false);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_sqck, 1, false);
+    
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);
 }
-
 
 // 5. SCEx SIGNAL INJECTION Initialization
 static inline void scex_inject_program_init(PIO pio, uint sm, uint offset, uint pin_data, uint pin_wfck) {

@@ -110,46 +110,90 @@
 #if defined(DEBUG_SERIAL_MONITOR)
 #include "hardware/clocks.h"
 #include <stdio.h>
+#include <stdint.h>
 
 // External request counter for SUB-Q tracking
 extern volatile uint32_t request_counter;
-
-void BoardDetectionLog(uint32_t window_result, uint8_t Wfck_mode, uint8_t region) {
-    static const char* regionNames[] = {"NTSC-J", "NTSC-U/C", "PAL", "Universal"};
-    static const char* modeNames[]   = {"LEGACY (High)", "FREQ (Oscillating)", "ERROR (Stuck Low)"};
-
-    printf("\n--- Board Detection ---\n");
-    printf(" CPU Speed  : %lu MHz\n", clock_get_hz(clk_sys) / 1000000L);
-    printf(" Sync Window: %lu\n", window_result); 
-    printf(" WFCK Mode  : %u (%s)\n", Wfck_mode, (Wfck_mode < 3) ? modeNames[Wfck_mode] : "Unknown");
-    printf(" Region ID  : %s\n", (region < 4) ? regionNames[region] : "Unknown");
-    printf("-----------------------\n\n");
-}
-
-void CaptureSUBQLog(uint32_t *dataBuffer32) {
-    // Basic null check to avoid crashes
-    if (!dataBuffer32) return;
-
-    // Error filtering: check if all 96 bits are zero
-    if (dataBuffer32[0] == 0 && dataBuffer32[1] == 0 && dataBuffer32[2] == 0) {
-        // You could add a printf("E") here to see silent errors
-        return;
+extern volatile uint32_t SUBQBuffer[3];
+/******************************************************************************************
+ * FUNCTION    : CaptureSUBQLog
+ * DESCRIPTION : Matrix display leveraging the global SUBQBuffer array.
+ *               Outputs chronological hardware traces alongside a dynamic logical block
+ *               that adapts layout formatting based on frame status (TOC vs DATA vs EROR).
+ ******************************************************************************************/
+void CaptureSUBQLog(bool crc_valid) {
+    static bool header_printed = false;
+    if (!header_printed) {
+        header_printed = true;
+        printf(" %-57s | %-10s\n", "RAW", "ASCII");
+        printf(" %-4s | %-3s | %-20s | %-4s | %-6s | %-9s | %-8s | %-8s\n", 
+           "CTRL", "ADR", "DATA", "CRC", "MODE", "TNO INDEX", "REL_TIME", "ABS_TIME");
+        printf("------------------------------------------------------------------------------------\n");
     }
 
-    // Display current request index
-    printf("[%lu] ", request_counter);
+    // 1. PRINT FIXED HEX PAYLOAD BLOCK DIRECTLY FROM 32-BIT REGISTERS
+    printf(" 0x%X  | 0x%X | %02X%02X%02X%02X%02X%02X%02X%02X%02X%02X | %04X | ",
+           (SUBQBuffer[0] >> 28) & 0x0F,                        // CTRL
+           (SUBQBuffer[0] >> 24) & 0x0F,                        // ADR
+           (SUBQBuffer[0] >> 24) & 0xFF,                        // DATA Byte 1
+           (SUBQBuffer[0] >> 16) & 0xFF,                        // DATA Byte 2
+           (SUBQBuffer[0] >> 8)  & 0xFF,                        // DATA Byte 3
+           SUBQBuffer[0] & 0xFF,                                // DATA Byte 4
+           (SUBQBuffer[1] >> 24) & 0xFF,                        // DATA Byte 5
+           (SUBQBuffer[1] >> 16) & 0xFF,                        // DATA Byte 6
+           (SUBQBuffer[1] >> 8)  & 0xFF,                        // DATA Byte 7
+           SUBQBuffer[1] & 0xFF,                                // DATA Byte 8
+           (SUBQBuffer[2] >> 24) & 0xFF,                        // DATA Byte 9
+           (SUBQBuffer[2] >> 16) & 0xFF,                        // DATA Byte 10
+           SUBQBuffer[2] & 0xFFFF                               // CRC
+    );
 
-    // Display 12 bytes (3 words) in Hexadecimal (LSB first)
-    for (uint8_t i = 0; i < 3; i++) {
-        uint32_t word = dataBuffer32[i];
-        printf("%02X %02X %02X %02X ", 
-              (uint8_t)(word & 0xFF), 
-              (uint8_t)((word >> 8) & 0xFF), 
-              (uint8_t)((word >> 16) & 0xFF), 
-              (uint8_t)((word >> 24) & 0xFF));
+    // 2. STATE INTERPOLATION MATRIX DE TON PROTOTYPE
+    if (!crc_valid) {
+        printf("                          ERROR");
+    } 
+    else if (((SUBQBuffer[0] >> 16) & 0xFF) == 0x00) {          // Mode Lead-In TOC (TNO == 00h)
+        printf("TOC   |  00   %02X  | %02X:%02X:%02X | %02X:%02X:%02X",  
+               (SUBQBuffer[0] >> 8) & 0xFF,                     // INDEX / POINT
+               SUBQBuffer[0] & 0xFF,                            // r_min
+               (SUBQBuffer[1] >> 24) & 0xFF,                    // r_sec
+               (SUBQBuffer[1] >> 16) & 0xFF,                    // r_frm
+               SUBQBuffer[1] & 0xFF,                            // a_min
+               (SUBQBuffer[2] >> 24) & 0xFF,                    // a_sec
+               (SUBQBuffer[2] >> 16) & 0xFF                     // a_frm
+        );
+    } 
+    else { // DATA region active
+        printf("DATA  |  %02X   %02X  | %02X:%02X:%02X | %02X:%02X:%02X", 
+               (SUBQBuffer[0] >> 16) & 0xFF,                    // TNO
+               (SUBQBuffer[0] >> 8) & 0xFF,                     // INDEX
+               SUBQBuffer[0] & 0xFF, (SUBQBuffer[1] >> 24) & 0xFF, (SUBQBuffer[1] >> 16) & 0xFF, // REL TIME
+               SUBQBuffer[1] & 0xFF, (SUBQBuffer[2] >> 24) & 0xFF, (SUBQBuffer[2] >> 16) & 0xFF  // ABS TIME
+        );
     }
+
     printf("\n");
 }
+
+
+/******************************************************************************************
+ * FUNCTION    : BoardDetectionLog
+ * DESCRIPTION : Outputs the hardware diagnostics for the WFCK clock lines over Serial.
+ ******************************************************************************************/
+void BoardDetectionLog(uint32_t window, uint8_t mode, uint32_t inject) {
+    printf("\n[WFCK DIAGNOSIS]\n");
+    printf(" -> Remaining Window : %u\n", window);
+    printf(" -> Detected Mode    : ");
+    
+    if (mode == 0)      printf("0 (Legacy / GATE High)\n");
+    else if (mode == 1) printf("1 (Frequency Active)\n");
+    else                printf("2 (Error / Stuck Low)\n");
+    
+    printf(" -> Inject Trigger   : %u\n", inject);
+    printf("---------------------------------------\n\n");
+}
+
+
 
 void InjectLog() {     
     printf(" >> INJECT!\n");
