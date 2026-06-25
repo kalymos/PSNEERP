@@ -148,32 +148,56 @@ void CaptureSUBQLog(bool crc_valid) {
            SUBQBuffer[2] & 0xFFFF                               // CRC
     );
 
-    // 2. STATE INTERPOLATION MATRIX DE TON PROTOTYPE
+    // 2. STATE INTERPOLATION MATRIX (Alignement strict et masquage des timers en TOC)
     if (!crc_valid) {
-        printf("                          ERROR");
+        printf("ERROR");
     } 
     else if (((SUBQBuffer[0] >> 16) & 0xFF) == 0x00) {          // Mode Lead-In TOC (TNO == 00h)
-        printf("TOC   |  00   %02X  | %02X:%02X:%02X | %02X:%02X:%02X",  
-               (SUBQBuffer[0] >> 8) & 0xFF,                     // INDEX / POINT
-               SUBQBuffer[0] & 0xFF,                            // r_min
-               (SUBQBuffer[1] >> 24) & 0xFF,                    // r_sec
-               (SUBQBuffer[1] >> 16) & 0xFF,                    // r_frm
-               SUBQBuffer[1] & 0xFF,                            // a_min
-               (SUBQBuffer[2] >> 24) & 0xFF,                    // a_sec
-               (SUBQBuffer[2] >> 16) & 0xFF                     // a_frm
-        );
+        uint8_t point = (SUBQBuffer[0] >> 8) & 0xFF;            // Extraction de POINT / INDEX
+        
+        // Affichage des premières colonnes jusqu'à l'index
+        printf("%-6s |  00   %02X  | ", "TOC", point);
+
+        // Au lieu d'afficher des faux timers REL_TIME et ABS_TIME, on fusionne l'espace 
+        // pour écrire les informations textuelles de Martin Korth de manière alignée.
+        if (point == 0xA0) {
+            printf("First Track: %02X  | Disk Type: %02X | Res: %02X", 
+                   (SUBQBuffer[1] >> 8) & 0xFF,                 // First Track number (BCD)
+                   SUBQBuffer[1] & 0xFF,                        // Disk Type Byte (00h=CD-DA/ROM)
+                   (SUBQBuffer[2] >> 24) & 0xFF                 // Reserved (00h)
+            );
+        } 
+        else if (point == 0xA1) {
+            printf("Last Track:  %02X  | Reserved:  %04X", 
+                   (SUBQBuffer[1] >> 8) & 0xFF,                 // Last Track number (BCD)
+                   ((SUBQBuffer[1] & 0xFF) << 8) | ((SUBQBuffer[2] >> 24) & 0xFF) // Reserved (0000h)
+            );
+        } 
+        else {
+            // Pour les pistes normales 01..99 ou A2 dans la TOC, on affiche les adresses brutes de Martin Korth
+            printf("L-In MSF: %02X:%02X:%02X | Start Track MSF: %02X:%02X:%02X", 
+                   SUBQBuffer[0] & 0xFF,                        // Lead-In Min
+                   (SUBQBuffer[1] >> 24) & 0xFF,                // Lead-In Sec
+                   (SUBQBuffer[1] >> 16) & 0xFF,                // Lead-In Frm
+                   (SUBQBuffer[1] >> 8)  & 0xFF,                // Track Start Min
+                   SUBQBuffer[1] & 0xFF,                        // Track Start Sec
+                   (SUBQBuffer[2] >> 24) & 0xFF                 // Track Start Frm
+            );
+        }
     } 
-    else { // DATA region active
-        printf("DATA  |  %02X   %02X  | %02X:%02X:%02X | %02X:%02X:%02X", 
+    else { // DATA region active (Ici, les vrais timers de jeu s'alignent parfaitement sous l'en-tête)
+        printf("%-6s |  %02X   %02X  | %02X:%02X:%02X | %02X:%02X:%02X", 
+               "DATA",                                          // MODE
                (SUBQBuffer[0] >> 16) & 0xFF,                    // TNO
                (SUBQBuffer[0] >> 8) & 0xFF,                     // INDEX
-               SUBQBuffer[0] & 0xFF, (SUBQBuffer[1] >> 24) & 0xFF, (SUBQBuffer[1] >> 16) & 0xFF, // REL TIME
-               SUBQBuffer[1] & 0xFF, (SUBQBuffer[2] >> 24) & 0xFF, (SUBQBuffer[2] >> 16) & 0xFF  // ABS TIME
+               SUBQBuffer[0] & 0xFF, (SUBQBuffer[1] >> 24) & 0xFF, (SUBQBuffer[1] >> 16) & 0xFF, // REL TIME (M:S:F)
+               SUBQBuffer[1] & 0xFF, (SUBQBuffer[2] >> 24) & 0xFF, (SUBQBuffer[2] >> 16) & 0xFF  // ABS TIME (M:S:F)
         );
     }
 
     printf("\n");
 }
+
 
 
 /******************************************************************************************

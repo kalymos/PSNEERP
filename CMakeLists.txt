@@ -110,7 +110,7 @@ pico_add_extra_outputs(PSNEERP)
 
 # Active l'UART et désactive l'USB pour stdio
 pico_enable_stdio_uart(PSNEERP 1)
-pico_enable_stdio_usb(PSNEERP 0)
+#pico_enable_stdio_usb(PSNEERP 0)
 
 
 # Supprime le fichier d'options C++ problématique du SDK Pico avant la compilation

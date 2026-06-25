@@ -2,16 +2,16 @@
 ; 1. UART_TX 
 ; =============================================================================
 
-.program uart_tx
-.side_set 1 opt
+;program uart_tx
+;side_set 1 opt
 
-public entry:
-    pull block          side 1      ; Repos (ligne à 1)
-    set x, 7            side 0 [6]  ; Start bit : 1 (set) + 6 (delay) + 1 (prochaine instruction) = 8 cycles
-bitloop:
-    out pins, 1                [6]  ; Data bit : 1 (out) + 6 (delay) + 1 (prochaine instruction) = 8 cycles
-    jmp x-- bitloop                 ; Boucle : dure 1 cycle
-    nop                 side 1 [7]  ; Stop bit : 1 (nop) + 7 (delay) = 8 cycles
+;public entry:
+;    pull block          side 1      ; Repos (ligne à 1)
+;    set x, 7            side 0 [6]  ; Start bit : 1 (set) + 6 (delay) + 1 (prochaine instruction) = 8 cycles
+;bitloop:
+;    out pins, 1                [6]  ; Data bit : 1 (out) + 6 (delay) + 1 (prochaine instruction) = 8 cycles
+;    jmp x-- bitloop                 ; Boucle : dure 1 cycle
+;    nop                 side 1 [7]  ; Stop bit : 1 (nop) + 7 (delay) = 8 cycles
 
 
 ; =============================================================================

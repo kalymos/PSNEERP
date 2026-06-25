@@ -43,7 +43,7 @@
  // --- Hardware Pins ---
 #define LED_PIN  16  // Default for Waveshare Pico Zero
 
-#define REQUEST_INJECT_TRIGGER 15 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
+#define REQUEST_INJECT_TRIGGER 500 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
 /*
  * TRIGGER CALIBRATION:
  * - Lower values (<5): Possible, but not beneficial.
@@ -89,6 +89,7 @@
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
+#include "hardware/uart.h" 
 
 uint offsetPATCH;  
 
@@ -100,6 +101,7 @@ void BoardDetectionLog(uint32_t window, uint8_t mode, uint32_t inject); // La vr
 void CaptureSUBQ(void);
 void FilterSUBQSamples(void);
 void CaptureSUBQLog(bool crc_valid);
+volatile bool subq_new_frame_ready = false;
 
 
 // --- VARIABLES GLOBALES DU PIPELINE SUBQ (SANS DOUBLONS) ---
@@ -132,14 +134,6 @@ volatile uint32_t request_counter = 0;
 /*******************************************************************************************************************
  *                         Code section
  ********************************************************************************************************************/
-/*******************************************************************************************************************
-#          UART 
-*********************************************************************************************************************/
-
-#include "pico/stdio_uart.h"
-
-#include "pico/stdlib.h"
-#include "hardware/pio.h"
 
 
 
@@ -511,12 +505,16 @@ void CaptureSUBQ(void) {
       CaptureSUBQLog(crc_valid);
     #endif
 
-    // Si la trame n'est pas parfaitement stable, on ne la transmet JAMAIS 
-    // au reste du firmware principal pour éviter de faire freezer la console.
     if (!crc_valid) {
+        // CORRECTION IMPORTANTE : On nettoie impérativement le buffer global en cas d'erreur
+        // pour éviter que le filtre asynchrone ne lise des données décalées.
+        SUBQBuffer[0] = 0; SUBQBuffer[1] = 0; SUBQBuffer[2] = 0;
         pio_sm_clear_fifos(pioSUBQ, smSUBQ); 
         return; 
     }
+
+    // AJOUT : On signale au filtre qu'une nouvelle trame physique vient d'arriver
+    subq_new_frame_ready = true; 
 }
 
 
@@ -524,53 +522,109 @@ void CaptureSUBQ(void) {
 /******************************************************************************************
  * FUNCTION    : FilterSUBQSamples
  * DESCRIPTION : Decodes, parses, and validates the incoming SQSO (Subcode Q Serial Output) 
- *               serial bitstream perfectly aligned by the hardware PIO engine.
+ *               serial bitstream. This protocol carries the structural and temporal 
+ *               geometry of the Compact Disc, outputting a complete 96-bit sector frame 
+ *               every 6.67 milliseconds under native PlayStation 2x CD-ROM playback speed 
+ *               (dropping to 13.3ms only during standard 1x Audio playback).
+ * 
+ *               THE RAW PHYSICAL SQSO FRAME STRUCTURE:
+ *               __________________________________________________________________________
+ *              |           |           |           |                              |           |
+ *              | SYNC (2b) | CTRL (4b) | ADR (4b)  |      DATA PAYLOAD (72b)      | CRC (16b) |
+ *              |___________|___________|___________|______________________________|___________|
+ * 
+ *               THE SQSO TIMING AND PACKET LAYOUT DECONSTRUCTION:
+ *               The 96 bits are pushed MSB-First into the hardware registers and are 
+ *               subdivided into four distinct logical sections based on the Red Book standard:
+ * 
+ *               1. TRACK CONTROL (CTRL) & ADDRESS (ADR) [Upper 8-Bits of current_word1]
+ *                  - CTRL (4 bits): Defines track properties. Games utilize data tracks,
+ *                    requiring Bit 2 to be set while Bit 3 (audio) is cleared (Value: 0x04).
+ *                  - ADR (4 bits): Specifies payload mapping mode. Mode 1 (0x01) signals 
+ *                    standard position, track indexing, and temporal metadata layout.
+ * 
+ *               2. TRACK NUMBER / TNO [Bits 16-23 of current_word1]
+ *                  - TNO (8 bits): Encoded in Binary-Coded Decimal (BCD). In the physical 
+ *                    outer track boundary known as the Lead-In zone, the CD decoder 
+ *                    strictly forces TNO to 0x00. This acts as the filter's gatekeeper.
+ * 
+ *               3. TABLE OF CONTENTS INDEX / INDEX [Bits 8-15 of current_word1]
+ *                  - INDEX (8 bits): Inside the Lead-In zone (TNO=0x00), this space changes 
+ *                    its function to output critical TOC descriptors (A0, A1, A2). The 
+ *                    filter utilizes a subtraction check to target these pointers.
+ * 
+ *               4. MINUTES / MIN [Bits 0-7 of current_word1]
+ *                  - MIN (8 bits): Tracks relative minutes. On specific multimedia models 
+ *                    like the SCPH-5903, Video CD (VCD) metadata layout formats inject 
+ *                    item descriptors (0x02) into this location. The filter monitors 
+ *                    and drops these patterns to block interference during movie streams.
+ * 
+ *               5. SECONDS / SEC [Bits 24-31 of current_word2]
+ *                  - SEC (8 bits): Tracks relative seconds. At the exact intersection where 
+ *                    the Lead-In spiral cross-fades into Track 01, an intentional integer 
+ *                    underflow check isolates the early startup window (0.0s to 2.0s).
+ * 
+ *               6. HARDWARE GUARD BYTE / ZERO [Bits 8-15 of current_word2]
+ *                  - ZERO (8 bits): Mandatory hardware synchronization spacer byte. Sony 
+ *                    specifications demand this field reads 0x00 to prove zero bus drift.
+ * 
+ *               7. INTEGRATION HYSTERESIS MANAGEMENT
+ *                  - Successfully authenticated patterns step up a capped 'request_counter' 
+ *                    to open the injection window, while corrupted frames or out-of-bounds 
+ *                    seeking steps it down to filter line glitches and motor noise.
  ******************************************************************************************/
 void FilterSUBQSamples(void) {
+    
+    // SÉCURITÉ ABSOLUE : Si le tampon a été écrasé à 0 par CaptureSUBQ suite à une erreur,
+    // on quitte immédiatement SANS appliquer de pénalité DECAY.
+    if (SUBQBuffer[0] == 0 && SUBQBuffer[1] == 0) {
+        return; 
+    }
 
-    // --- STEP 1: SUBQ Frame Track & Hardware Spacer Gatekeeper ---
-    // TRACK/TNO occupe les bits 23-16 de SUBQBuffer[0] (Masque 0x00FF0000)
-    // ZERO hardware spacer occupe les bits 15-8 de SUBQBuffer[1] (Masque 0x0000FF00)
-    if ((SUBQBuffer[0] & 0x00FF0000) == 0x00000000 && (SUBQBuffer[1] & 0x0000FF00) == 0x00000000) {
+    // --- STEP 0: Data/TOC Validation ---
+    uint8_t isDataSector = ((((SUBQBuffer[0] >> 24) & 0xFF) & 0xD0) == 0x40);
 
-        #ifdef SCPH_5903
-        // Multimedia VCD discrimination check : MIN occupe désormais les bits 7-0 de SUBQBuffer[0]
-        if ((SUBQBuffer[0] & 0x000000FF) == 0x02) {
-            if (request_counter > 0) request_counter--;
-            return;
-        }
-        #endif
+    // --- STEP 1: SUBQ Frame Synchronization ---
+    if (((SUBQBuffer[0] >> 16) & 0xFF) == 0x00 && ((SUBQBuffer[1] >> 8) & 0xFF) == 0x00) {
 
-        // --- STEP 2: Fully-Condensed 32-Bit Evaluation Matrix ---
-        // Équivalences des champs alignés par le PIO dans SUBQBuffer[0] :
-        // - CTRL/ADR       = (SUBQBuffer[0] >> 24) & 0xFF  (Bits 31-24)
-        // - INDEX / POINT  = (SUBQBuffer[0] >> 8) & 0xFF   (Bits 15-8)
-        // SEC (Seconds) se trouve dans les bits 31-24 de SUBQBuffer[1] -> (SUBQBuffer[1] >> 24) & 0xFF
-        
-        if (
-            // Condition A : Mode TOC / Secteur de données valide
-            ((((SUBQBuffer[0] >> 24) & 0x40) == 0x40) && // Bit 6 de CTRL est SET (Data Sector)
-             ((((uint8_t)(SUBQBuffer[0] >> 8) - 0xA0) <= 2) || // INDEX est entre 0xA0 et 0xA2 (TOC Pointers)
-              (((SUBQBuffer[0] >> 8) & 0xFF) == 0x01 && ((((SUBQBuffer[1] >> 24) - 3) & 0xFF) >= 0xF5)))) // Ou Index == 01h et SEC sous-flow (00:00:00 à 00:02:00)
-            
+        uint8_t index = (SUBQBuffer[0] >> 8) & 0xFF;
+        uint8_t min   = SUBQBuffer[0] & 0xFF;
+        uint8_t track = (SUBQBuffer[0] >> 16) & 0xFF;
+
+        if ( 
+            (isDataSector && (
+                (index >= 0xA0) || 
+                (index == 0x01 && (((min - 3) & 0xFF) >= 0xF5))
+            )) 
             || 
-            
-            // Condition B : Maintien de l'accumulation (Hystérésis active)
-            (request_counter > 0 && 
-             ((((SUBQBuffer[0] >> 24) & 0x0F) == 0x01) || // ADR == 1 (Position data)
-              (((SUBQBuffer[0] >> 24) & 0x40) == 0x40)))  // Ou bit de contrôle DATA activé
-           ) 
+            (request_counter > 0 && (
+                (((SUBQBuffer[0] >> 24) & 0xFF) == 0x01) || 
+                isDataSector
+            ))
+        ) 
         {
             request_counter++; 
+            printf("[SUBQ] MATCH | Buf0: 0x%08X | Buf1: 0x%08X | Counter: %d\n", SUBQBuffer[0], SUBQBuffer[1], request_counter);
             return;
         }
     }
 
-    // --- STEP 3: Hysteresis Signal Decay Loop Step ---
+    // --- STEP 2: Signal Decay Équilibré ---
+    // On n'applique le DECAY que si on lit une VRAIE trame (pas des résidus de glissement)
+    // et que le compteur est actif.
     if (request_counter > 0) {
-        request_counter--; 
+        uint8_t track = (SUBQBuffer[0] >> 16) & 0xFF;
+        
+        // Si la console est passée sur la piste de jeu principale (ex: Track 02 ou plus),
+        // alors le démarrage est fini, on applique le decay pour couper l'injection.
+        if (track > 0x01 && track < 100) {
+            request_counter--; 
+            printf("[SUBQ] DECAY | Buf0: 0x%08X | Buf1: 0x%08X | Counter: %d\n", SUBQBuffer[0], SUBQBuffer[1], request_counter);
+        }
     }
 }
+
+
 
 /*********************************************************************************************
  * FUNCTION    : PerformInjectionSequence
@@ -692,7 +746,9 @@ void Init() {
     // Initial visual feedback: Dim White (System Ready)
     SetLEDDynamic(LED_WHITE, 50);
 
-    stdio_uart_init_full(uart1, 115200, 8, -1);
+    stdio_init_all();
+    uart_init(uart0, 115200);
+    gpio_set_function(0, GPIO_FUNC_UART);
 }
 
 
