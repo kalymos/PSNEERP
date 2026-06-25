@@ -126,77 +126,64 @@ void CaptureSUBQLog(bool crc_valid) {
     if (!header_printed) {
         header_printed = true;
         printf(" %-57s | %-10s\n", "RAW", "ASCII");
-        printf(" %-4s | %-3s | %-20s | %-4s | %-6s | %-9s | %-8s | %-8s\n", 
-           "CTRL", "ADR", "DATA", "CRC", "MODE", "TNO INDEX", "REL_TIME", "ABS_TIME");
-        printf("------------------------------------------------------------------------------------\n");
+        printf(" %-4s | %-3s | %-20s | %-4s | %-6s | %-9s | %-56s | %-10s\n", 
+           "CTRL", "ADR", "DATA", "CRC", "MODE", "TNO INDEX", "DETAILS", "COUNTER");
+        printf("---------------------------------------------------------------------------------------------------------------------\n");
     }
 
-    // 1. PRINT FIXED HEX PAYLOAD BLOCK DIRECTLY FROM 32-BIT REGISTERS
-    printf(" 0x%X  | 0x%X | %02X%02X%02X%02X%02X%02X%02X%02X%02X%02X | %04X | ",
-           (SUBQBuffer[0] >> 28) & 0x0F,                        // CTRL
-           (SUBQBuffer[0] >> 24) & 0x0F,                        // ADR
-           (SUBQBuffer[0] >> 24) & 0xFF,                        // DATA Byte 1
-           (SUBQBuffer[0] >> 16) & 0xFF,                        // DATA Byte 2
-           (SUBQBuffer[0] >> 8)  & 0xFF,                        // DATA Byte 3
-           SUBQBuffer[0] & 0xFF,                                // DATA Byte 4
-           (SUBQBuffer[1] >> 24) & 0xFF,                        // DATA Byte 5
-           (SUBQBuffer[1] >> 16) & 0xFF,                        // DATA Byte 6
-           (SUBQBuffer[1] >> 8)  & 0xFF,                        // DATA Byte 7
-           SUBQBuffer[1] & 0xFF,                                // DATA Byte 8
-           (SUBQBuffer[2] >> 24) & 0xFF,                        // DATA Byte 9
-           (SUBQBuffer[2] >> 16) & 0xFF,                        // DATA Byte 10
-           SUBQBuffer[2] & 0xFFFF                               // CRC
+    // --- ANALYSE ET DECOUPAGE NATIF ALIGNE (LSB to MSB) ---
+    uint8_t c0  = SUBQBuffer[0] & 0xFF;         
+    uint8_t c1  = (SUBQBuffer[0] >> 8)  & 0xFF; 
+    uint8_t c2  = (SUBQBuffer[0] >> 16) & 0xFF; 
+    uint8_t c3  = (SUBQBuffer[0] >> 24) & 0xFF; 
+    uint8_t c4  = SUBQBuffer[1] & 0xFF;         
+    uint8_t c5  = (SUBQBuffer[1] >> 8)  & 0xFF; 
+    uint8_t c6  = (SUBQBuffer[1] >> 16) & 0xFF; 
+    uint8_t c7  = (SUBQBuffer[1] >> 24) & 0xFF; 
+    uint8_t c8  = SUBQBuffer[2] & 0xFF;         
+    uint8_t c9  = (SUBQBuffer[2] >> 8)  & 0xFF; 
+    uint16_t crc = (SUBQBuffer[2] >> 16) & 0xFFFF; 
+
+    // 1. DUMP HEXADÉCIMAL STANDARDISÉ 
+    printf(" 0x%-2X | 0x%-1X | %02X%02X%02X%02X%02X%02X%02X%02X%02X%02X | %04X | ",
+           (c0 >> 4) & 0x0F, c0 & 0x0F,
+           c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, crc
     );
 
-    // 2. STATE INTERPOLATION MATRIX (Alignement strict et masquage des timers en TOC)
+    // 2. LOGIQUE D'INTERPOLATION UNIQUE SUR UNE SEULE LIGNE
     if (!crc_valid) {
-        printf("ERROR");
+        printf("%-6s |  --   --  | %-56s | %-10s", "ERROR", "Trame corrompue ou instable", "N/A");
     } 
-    else if (((SUBQBuffer[0] >> 16) & 0xFF) == 0x00) {          // Mode Lead-In TOC (TNO == 00h)
-        uint8_t point = (SUBQBuffer[0] >> 8) & 0xFF;            // Extraction de POINT / INDEX
-        
-        // Affichage des premières colonnes jusqu'à l'index
-        printf("%-6s |  00   %02X  | ", "TOC", point);
+    else if (c1 == 0x00) {          // Mode Lead-In TOC (TNO == 00h)
+        printf("%-6s |  00   %02X  | ", "TOC", c2); 
 
-        // Au lieu d'afficher des faux timers REL_TIME et ABS_TIME, on fusionne l'espace 
-        // pour écrire les informations textuelles de Martin Korth de manière alignée.
-        if (point == 0xA0) {
-            printf("First Track: %02X  | Disk Type: %02X | Res: %02X", 
-                   (SUBQBuffer[1] >> 8) & 0xFF,                 // First Track number (BCD)
-                   SUBQBuffer[1] & 0xFF,                        // Disk Type Byte (00h=CD-DA/ROM)
-                   (SUBQBuffer[2] >> 24) & 0xFF                 // Reserved (00h)
-            );
+        if (c2 == 0xA0) {
+            // Création d'une chaîne temporaire pour formater proprement les détails
+            char details[60];
+            snprintf(details, sizeof(details), "First Track: %02X  | Disk Type: %02X | Res: %02X", c3, c4, c5);
+            printf("%-56s | Counter: %-3d", details, request_counter);
         } 
-        else if (point == 0xA1) {
-            printf("Last Track:  %02X  | Reserved:  %04X", 
-                   (SUBQBuffer[1] >> 8) & 0xFF,                 // Last Track number (BCD)
-                   ((SUBQBuffer[1] & 0xFF) << 8) | ((SUBQBuffer[2] >> 24) & 0xFF) // Reserved (0000h)
-            );
+        else if (c2 == 0xA1) {
+            char details[60];
+            snprintf(details, sizeof(details), "Last Track:  %02X  | Reserved:  %02X%02X", c3, c4, c5);
+            printf("%-56s | Counter: %-3d", details, request_counter);
         } 
         else {
-            // Pour les pistes normales 01..99 ou A2 dans la TOC, on affiche les adresses brutes de Martin Korth
-            printf("L-In MSF: %02X:%02X:%02X | Start Track MSF: %02X:%02X:%02X", 
-                   SUBQBuffer[0] & 0xFF,                        // Lead-In Min
-                   (SUBQBuffer[1] >> 24) & 0xFF,                // Lead-In Sec
-                   (SUBQBuffer[1] >> 16) & 0xFF,                // Lead-In Frm
-                   (SUBQBuffer[1] >> 8)  & 0xFF,                // Track Start Min
-                   SUBQBuffer[1] & 0xFF,                        // Track Start Sec
-                   (SUBQBuffer[2] >> 24) & 0xFF                 // Track Start Frm
-            );
+            char details[60];
+            snprintf(details, sizeof(details), "L-In MSF: %02X:%02X:%02X | Start Track MSF: %02X:%02X:%02X", c3, c4, c5, c7, c8, c9);
+            printf("%-56s | Counter: %-3d", details, request_counter);
         }
     } 
-    else { // DATA region active (Ici, les vrais timers de jeu s'alignent parfaitement sous l'en-tête)
-        printf("%-6s |  %02X   %02X  | %02X:%02X:%02X | %02X:%02X:%02X", 
-               "DATA",                                          // MODE
-               (SUBQBuffer[0] >> 16) & 0xFF,                    // TNO
-               (SUBQBuffer[0] >> 8) & 0xFF,                     // INDEX
-               SUBQBuffer[0] & 0xFF, (SUBQBuffer[1] >> 24) & 0xFF, (SUBQBuffer[1] >> 16) & 0xFF, // REL TIME (M:S:F)
-               SUBQBuffer[1] & 0xFF, (SUBQBuffer[2] >> 24) & 0xFF, (SUBQBuffer[2] >> 16) & 0xFF  // ABS TIME (M:S:F)
-        );
+    else { // DATA region active
+        char details[60];
+        snprintf(details, sizeof(details), "REL_TIME: %02X:%02X:%02X | ABS_TIME: %02X:%02X:%02X", c3, c4, c5, c7, c8, c9);
+        printf("%-6s |  %02X   %02X  | %-56s | Counter: %-3d", "DATA", c1, c2, details, request_counter);
     }
 
     printf("\n");
 }
+
+
 
 
 

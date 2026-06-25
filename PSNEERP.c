@@ -443,7 +443,6 @@ void CaptureSUBQ(void) {
         last_pulse_time = 0;
         pio_sm_exec(pioSUBQ, smSUBQ, pio_encode_push(false, true)); 
         sleep_us(2);
-        
         if (pio_sm_get_rx_fifo_level(pioSUBQ, smSUBQ) < 3) {
             pio_sm_clear_fifos(pioSUBQ, smSUBQ); 
             return; 
@@ -460,62 +459,46 @@ void CaptureSUBQ(void) {
         return;
     }
 
-    // --- STEP 3: FIFO CHECK (ZÉRO ATTENTE BLOQUANTE) ---
+    // --- STEP 3: FIFO CHECK ---
     if (pio_sm_get_rx_fifo_level(pioSUBQ, smSUBQ) < 3) {
         return; 
     }
 
     last_pulse_time = now; 
 
-    uint32_t local_raw[3];
-    local_raw[0] = pio_sm_get(pioSUBQ, smSUBQ);
-    local_raw[1] = pio_sm_get(pioSUBQ, smSUBQ);
-    local_raw[2] = pio_sm_get(pioSUBQ, smSUBQ);
+    // AFFECTATION DIRECTE DEPUIS LE SILICIUM PIO
+    SUBQBuffer[0] = pio_sm_get(pioSUBQ, smSUBQ);
+    SUBQBuffer[1] = pio_sm_get(pioSUBQ, smSUBQ);
+    SUBQBuffer[2] = pio_sm_get(pioSUBQ, smSUBQ);
 
-    if (local_raw[0] == 0 && local_raw[1] == 0 && local_raw[2] == 0) {
+    if (SUBQBuffer[0] == 0 && SUBQBuffer[1] == 0 && SUBQBuffer[2] == 0) {
         pio_sm_clear_fifos(pioSUBQ, smSUBQ);
         return;
     }
 
-    // --- STEP 4: REDRESSEMENT RAPIDE DES OCTETS ---
-    uint8_t clean[12];
-    for (int i = 0; i < 12; i++) {
-        uint8_t b = (local_raw[i >> 2] >> (24 - ((i & 3) * 8))) & 0xFF;
-        b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
-        b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
-        b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
-        clean[i] = b;
-    }
-
-    // --- STEP 5: FILTRE ANTI-FREEZE SÉCURISÉ ---
-    // On n'active 'crc_valid' que si la trame est une trame de position standard (ADR == 1)
-    // ET que le numéro de piste est cohérent (inférieur à 100). On rejette les trames instables 
-    // comme le mode 3 ou les valeurs aberrantes (0xAA) qui font planter FilterSUBQSamples.
-    uint8_t adr = clean[0] & 0x0F;
-    uint8_t track = clean[1];
+    // --- STEP 5: FILTRE ANTI-FREEZE NATUREL ---
+    // CTRL/ADR est sur l'octet le plus bas de SUBQBuffer[0] (bits 0-7)
+    uint8_t adr = SUBQBuffer[0] & 0x0F;
+    // TRACK est sur l'octet juste au-dessus (bits 8-15)
+    uint8_t track = (SUBQBuffer[0] >> 8) & 0xFF;
     
     bool crc_valid = (adr == 0x01) && (track < 100);
 
-    // --- STEP 6: ALIMENTATION DU BUFFER GLOBAL ---
-    SUBQBuffer[0] = (clean[0] << 24) | (clean[1] << 16) | (clean[2] << 8) | clean[3];
-    SUBQBuffer[1] = (clean[4] << 24) | (clean[5] << 16) | (clean[6] << 8) | clean[7];
-    SUBQBuffer[2] = (clean[8] << 24) | (clean[9] << 16) | (clean[10] << 8) | clean[11];
-
+    // AJOUT IMPORTANT : On exécute le filtre d'abord pour qu'il calcule le Counter
+    subq_new_frame_ready = true; // Donne le feu vert au filtre
     #if defined(DEBUG_SERIAL_MONITOR)
-      CaptureSUBQLog(crc_valid);
+    CaptureSUBQLog(crc_valid); // Le log s'affiche ensuite
     #endif
 
+
     if (!crc_valid) {
-        // CORRECTION IMPORTANTE : On nettoie impérativement le buffer global en cas d'erreur
-        // pour éviter que le filtre asynchrone ne lise des données décalées.
         SUBQBuffer[0] = 0; SUBQBuffer[1] = 0; SUBQBuffer[2] = 0;
         pio_sm_clear_fifos(pioSUBQ, smSUBQ); 
         return; 
     }
 
-    // AJOUT : On signale au filtre qu'une nouvelle trame physique vient d'arriver
-    subq_new_frame_ready = true; 
 }
+
 
 
 
@@ -574,55 +557,49 @@ void CaptureSUBQ(void) {
  *                    seeking steps it down to filter line glitches and motor noise.
  ******************************************************************************************/
 void FilterSUBQSamples(void) {
-    
-    // SÉCURITÉ ABSOLUE : Si le tampon a été écrasé à 0 par CaptureSUBQ suite à une erreur,
-    // on quitte immédiatement SANS appliquer de pénalité DECAY.
+    // BARRIÈRE : Empêche le traitement répétitif sur la même trame
+    if (!subq_new_frame_ready) return;
+    subq_new_frame_ready = false; 
+
+    // SÉCURITÉ ABSOLUE : Si le tampon est nettoyé à 0 suite à une erreur,
+    // on sort IMMÉDIATEMENT sans appliquer le decay pour ne pas fausser le compteur sur du bruit.
     if (SUBQBuffer[0] == 0 && SUBQBuffer[1] == 0) {
         return; 
     }
 
-    // --- STEP 0: Data/TOC Validation ---
-    uint8_t isDataSector = ((((SUBQBuffer[0] >> 24) & 0xFF) & 0xD0) == 0x40);
-
-    // --- STEP 1: SUBQ Frame Synchronization ---
-    if (((SUBQBuffer[0] >> 16) & 0xFF) == 0x00 && ((SUBQBuffer[1] >> 8) & 0xFF) == 0x00) {
-
-        uint8_t index = (SUBQBuffer[0] >> 8) & 0xFF;
-        uint8_t min   = SUBQBuffer[0] & 0xFF;
-        uint8_t track = (SUBQBuffer[0] >> 16) & 0xFF;
-
-        if ( 
-            (isDataSector && (
-                (index >= 0xA0) || 
-                (index == 0x01 && (((min - 3) & 0xFF) >= 0xF5))
-            )) 
-            || 
-            (request_counter > 0 && (
-                (((SUBQBuffer[0] >> 24) & 0xFF) == 0x01) || 
-                isDataSector
-            ))
-        ) 
-        {
-            request_counter++; 
-            printf("[SUBQ] MATCH | Buf0: 0x%08X | Buf1: 0x%08X | Counter: %d\n", SUBQBuffer[0], SUBQBuffer[1], request_counter);
-            return;
-        }
+    // --- STEP 1: FILTRE DE SYNCHRONISATION & MATRICE DE HIT UNIQUE (Version Aplatie) ---
+    if (
+        // Condition A : On doit impérativement être dans la TOC (bits 8-15 == 00) 
+        // ET le secteur doit être DATA (bits 0-7 & 0xD0 == 0x40). On fusionne ces deux masques en 0x0000FFD0 == 0x00000040.
+        (((SUBQBuffer[0] & 0x0000FFD0) == 0x00000040) && (
+            // INDEX >= A0 (bits 16-23)
+            ((SUBQBuffer[0] & 0x00FF0000) >= 0x00A00000) || 
+            // INDEX == 01 (bits 16-23) ET calcul wrap-around sur REL_MIN (bits 24-31)
+            (((SUBQBuffer[0] & 0x00FF0000) == 0x00010000) && (((((SUBQBuffer[0] & 0xFF000000) - 0x03000000) & 0xFF000000) >= 0xF5000000)))
+        ))
+        || 
+        // Condition B : Maintien du Tracking Lock à l'intérieur de la TOC (Si le compteur a démarré)
+        // Pour éviter que le compteur ne continue à monter pendant le jeu, on force aussi la barrière TRACK == 00 ici
+        (request_counter > 0 && ((SUBQBuffer[0] & 0x0000FF00) == 0x00000000) && (
+            ((SUBQBuffer[0] & 0x000000FF) == 0x00000001) || // Secteur Audio 01
+            ((SUBQBuffer[0] & 0x000000D0) == 0x00000040)    // Secteur Data
+        ))
+    ) 
+    {
+        request_counter++; 
+        return;
     }
 
-    // --- STEP 2: Signal Decay Équilibré ---
-    // On n'applique le DECAY que si on lit une VRAIE trame (pas des résidus de glissement)
-    // et que le compteur est actif.
+
+    // --- STEP 2: SIGNAL DECAY (Décrémentation directe) ---
+    // Si on arrive ici, c'est que la trame est valide (CRC OK) mais qu'elle provient 
+    // de la zone de jeu (Track 01 active). Le compteur va descendre jusqu'à 0 pour couper l'injection.
     if (request_counter > 0) {
-        uint8_t track = (SUBQBuffer[0] >> 16) & 0xFF;
-        
-        // Si la console est passée sur la piste de jeu principale (ex: Track 02 ou plus),
-        // alors le démarrage est fini, on applique le decay pour couper l'injection.
-        if (track > 0x01 && track < 100) {
-            request_counter--; 
-            printf("[SUBQ] DECAY | Buf0: 0x%08X | Buf1: 0x%08X | Counter: %d\n", SUBQBuffer[0], SUBQBuffer[1], request_counter);
-        }
+        request_counter--; 
     }
 }
+
+
 
 
 
