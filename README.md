@@ -8,8 +8,8 @@
 | LED | OK |
 | Serial port | OK |
 | Card detection | OK |
-| SUBQ reading | In progress |
-| SUBQ filter | In progress |
+| SUBQ reading | OK |
+| SUBQ filter | OK |
 | Region code injection | To do |
 | BIOS patch | To do |
 | CMake | To clean up / To do* |
