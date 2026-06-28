@@ -105,7 +105,7 @@ target_include_directories(PSNEERP PRIVATE
 )
 
 pico_add_extra_outputs(PSNEERP)
-
+    
 
 
 # Active l'UART et désactive l'USB pour stdio

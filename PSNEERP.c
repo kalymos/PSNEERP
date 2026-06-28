@@ -43,7 +43,7 @@
  // --- Hardware Pins ---
 #define LED_PIN  16  // Default for Waveshare Pico Zero
 
-#define REQUEST_INJECT_TRIGGER 500 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
+#define REQUEST_INJECT_TRIGGER 15 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
 /*
  * TRIGGER CALIBRATION:
  * - Lower values (<5): Possible, but not beneficial.
@@ -90,6 +90,7 @@
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
 #include "hardware/uart.h" 
+#include "hardware/clocks.h"
 
 uint offsetPATCH;  
 
@@ -142,49 +143,43 @@ volatile uint32_t request_counter = 0;
 *          Handles visual feedback for system status and SUBQ stability.
 *********************************************************************************************************************/
 
-// Global variables for the LED PIO
-PIO pioLED = pio1; // Use the second PIO block to avoid interference with SUBQ/BIOS
-uint smLED = 0;
+#define PIO_LED  pio1
+#define SM_LED   0  // Fixé statiquement : évite pio_claim_unused_sm (YAGNI)
 
-void NeoPixel_Init() {
-    // 1. Charger le code dans le PIO
-    uint offset = pio_add_program(pioLED, &ws2812_program);
-    
-    // 2. Réserver une State Machine
-    smLED = pio_claim_unused_sm(pioLED, true);
-    
-    // 3. Configurer tout le reste (GPIO, Clock, FIFO, Shift) via ton .h
-    ws2812_program_init(pioLED, smLED, offset, LED_PIN, 800000.0f, false);
+void NeoPixel_Init(void) {
+    // Chargement et initialisation directe sur pio1, state machine 0
+    uint offset = pio_add_program(PIO_LED, &ws2812_program);
+    ws2812_program_init(PIO_LED, SM_LED, offset, LED_PIN, 800000.0f, false);
 }
 
-
 /**
- * Set LED color at full brightness (standard format 0xGGRRBB00)
+ * Envoie la couleur directement au PIO.
+ * Format attendu : 0xGGRRBB00. L'intensité doit être pré-calculée dans vos constantes.
  */
-void SetLED(uint32_t color) {
-    // On décale de 8 bits vers la gauche pour aligner GGRRBB sur le haut du registre 32 bits
-    pio_sm_put_blocking(pioLED, smLED, color << 8u);
-}
 
 
-/**
- * Set LED color with direct intensity (0-255)
- */
 void SetLEDDynamic(uint32_t color, uint8_t intensity) {
-    if (intensity == 0) {
-        pio_sm_put_blocking(pioLED, smLED, 0);
-        return;
-    }
-
-    // Extract color components and apply the pre-calculated intensity
+    // Calcul direct et exact des proportions
     uint32_t g = (((color >> 24) & 0xFF) * intensity) >> 8;
     uint32_t r = (((color >> 16) & 0xFF) * intensity) >> 8;
-    uint32_t b = (((color >> 8) & 0xFF) * intensity) >> 8;
+    uint32_t b = (((color >> 8)  & 0xFF) * intensity) >> 8;
 
-    // Reconstruct and shift for PIO
-    uint32_t final_color = (g << 16) | (r << 8) | b;
-    pio_sm_put_blocking(pioLED, smLED, final_color << 8u);
+    uint32_t final_color = (g << 24) | (r << 16) | (b << 8);
+    pio_sm_put_blocking(PIO_LED, SM_LED, final_color);
 }
+
+
+
+#define LED_OFF     0x00000000
+#define LED_RED     0x00FF0000
+#define LED_GREEN   0xFF000000
+#define LED_BLUE    0x0000FF00
+#define LED_MAGENTA 0x00FFFF00
+#define LED_CYAN    0xFF00FF00
+#define LED_YELLOW  0xFFFF0000
+#define LED_WHITE   0xFFFFFF00
+#define LED_ORANGE  0x80FF0000
+#define LED_PURPLE  0x0080FF00
 
 
 /****************************************************************************************
@@ -359,61 +354,36 @@ void Bios_Patching(void) {
  *******************************************************************************************************************/
 
 void BoardDetection(void) {
-    
     wfck_mode = 0;                    // Default: Mode 0 (Legacy/GATE)
     uint8_t pulse_hits = 25;          // Required oscillations to confirm Mode 1 (Frequency)
     uint32_t detectionWindow = 1000000; 
 
-    // Wait for the  processor to stabilize if not in BIOS patch mode
     #if !defined(BIOS_PATCH)
         printf("Sleep 300ms...\n");
         sleep_ms(300);          
-    #endif        
+    #endif 
+    
+    SetLEDDynamic(LED_BLUE, 100); 
 
     // Main detection loop
     while (detectionWindow > 0) {
         detectionWindow--; 
 
-        // Monitor for LOW transitions (only occurs in Frequency mode or Error state)
         if (!gpio_get(PIN_WFCK)) { 
             pulse_hits--;        
 
             if (pulse_hits == 0) {
                 wfck_mode = 1;        // Confirmed: Mode 1 (Frequency)
+                SetLEDDynamic(LED_MAGENTA, 100);
                 break;         
             }
 
-            // Sync: Wait for signal to return HIGH to avoid double counting
-            // decrement detectionWindow to prevent infinite hangs if signal is stuck LOW
             while (!gpio_get(PIN_WFCK) && detectionWindow > 0) {
                 detectionWindow--;
             }
         }
     }
     
-    // --- Final Diagnosis ---
-    // If the window expired and we saw little to no activity while signal is LOW
-    if (detectionWindow == 0 && pulse_hits > 15) {
-        if (!gpio_get(PIN_WFCK)) {
-            wfck_mode = 2;              // Confirmed: Mode 2 (Error - Stuck at Ground)
-            
-            // Visual Error feedback: Blinking Blue (per user preference)
-            for(int i=0; i<3; i++) {
-                SetLEDDynamic(LED_BLUE, 100);
-                sleep_ms(100);
-                SetLEDDynamic(0, 0); 
-                sleep_ms(100);
-            }
-            SetLEDDynamic(LED_BLUE, 100); // Laisse allumé en rouge à la fin
-        }
-    }
-
-    // // Set LED to Magenta if we remain in Mode 0 (Legacy/High)
-    if (wfck_mode == 0) {
-        SetLEDDynamic(LED_MAGENTA, 100);
-    }
-
-    //gpio_disable_pulls(PIN_WFCK);
 
     #if defined(DEBUG_SERIAL_MONITOR)
         BoardDetectionLog(detectionWindow, wfck_mode, INJECT_SCEx);
@@ -439,10 +409,10 @@ void CaptureSUBQ(void) {
     uint32_t now = time_us_32(); 
 
     // --- STEP 1: TIMEOUT VALIDATION ---
-    if (now - last_pulse_time > 1500 && last_pulse_time != 0) {
+    if (last_pulse_time != 0 && (now - last_pulse_time > 1500)) {
         last_pulse_time = 0;
         pio_sm_exec(pioSUBQ, smSUBQ, pio_encode_push(false, true)); 
-        sleep_us(2);
+        busy_wait_us_32(2); // OPTIMISATION 1 : Utilisation du timer hardware natif (pas de scheduler de sleep)
         if (pio_sm_get_rx_fifo_level(pioSUBQ, smSUBQ) < 3) {
             pio_sm_clear_fifos(pioSUBQ, smSUBQ); 
             return; 
@@ -471,32 +441,29 @@ void CaptureSUBQ(void) {
     SUBQBuffer[1] = pio_sm_get(pioSUBQ, smSUBQ);
     SUBQBuffer[2] = pio_sm_get(pioSUBQ, smSUBQ);
 
-    if (SUBQBuffer[0] == 0 && SUBQBuffer[1] == 0 && SUBQBuffer[2] == 0) {
+    // OPTIMISATION 2 : Règle 4 appliquée sur un masque binaire léger (évite 3 comparaisons lourdes)
+    if ((SUBQBuffer[0] | SUBQBuffer[1] | SUBQBuffer[2]) == 0) {
         pio_sm_clear_fifos(pioSUBQ, smSUBQ);
         return;
     }
 
     // --- STEP 5: FILTRE ANTI-FREEZE NATUREL ---
-    // CTRL/ADR est sur l'octet le plus bas de SUBQBuffer[0] (bits 0-7)
     uint8_t adr = SUBQBuffer[0] & 0x0F;
-    // TRACK est sur l'octet juste au-dessus (bits 8-15)
     uint8_t track = (SUBQBuffer[0] >> 8) & 0xFF;
     
     bool crc_valid = (adr == 0x01) && (track < 100);
 
-    // AJOUT IMPORTANT : On exécute le filtre d'abord pour qu'il calcule le Counter
-    subq_new_frame_ready = true; // Donne le feu vert au filtre
+    subq_new_frame_ready = true; 
+    
     #if defined(DEBUG_SERIAL_MONITOR)
-    CaptureSUBQLog(crc_valid); // Le log s'affiche ensuite
+    CaptureSUBQLog(crc_valid); 
     #endif
-
 
     if (!crc_valid) {
         SUBQBuffer[0] = 0; SUBQBuffer[1] = 0; SUBQBuffer[2] = 0;
         pio_sm_clear_fifos(pioSUBQ, smSUBQ); 
         return; 
     }
-
 }
 
 
@@ -561,44 +528,64 @@ void FilterSUBQSamples(void) {
     if (!subq_new_frame_ready) return;
     subq_new_frame_ready = false; 
 
-    // SÉCURITÉ ABSOLUE : Si le tampon est nettoyé à 0 suite à une erreur,
-    // on sort IMMÉDIATEMENT sans appliquer le decay pour ne pas fausser le compteur sur du bruit.
-    if (SUBQBuffer[0] == 0 && SUBQBuffer[1] == 0) {
+    // OPTIMISATION RAM/CPU : Copie immédiate dans les registres internes 32 bits du Cortex-M0+
+    uint32_t reg0 = SUBQBuffer[0];
+    uint32_t reg1 = SUBQBuffer[1];
+
+    // SÉCURITÉ ABSOLUE : Test ultra-rapide sur les registres
+    if ((reg0 | reg1) == 0) {
         return; 
     }
 
-    // --- STEP 1: FILTRE DE SYNCHRONISATION & MATRICE DE HIT UNIQUE (Version Aplatie) ---
-    if (
-        // Condition A : On doit impérativement être dans la TOC (bits 8-15 == 00) 
-        // ET le secteur doit être DATA (bits 0-7 & 0xD0 == 0x40). On fusionne ces deux masques en 0x0000FFD0 == 0x00000040.
-        (((SUBQBuffer[0] & 0x0000FFD0) == 0x00000040) && (
-            // INDEX >= A0 (bits 16-23)
-            ((SUBQBuffer[0] & 0x00FF0000) >= 0x00A00000) || 
-            // INDEX == 01 (bits 16-23) ET calcul wrap-around sur REL_MIN (bits 24-31)
-            (((SUBQBuffer[0] & 0x00FF0000) == 0x00010000) && (((((SUBQBuffer[0] & 0xFF000000) - 0x03000000) & 0xFF000000) >= 0xF5000000)))
-        ))
-        || 
-        // Condition B : Maintien du Tracking Lock à l'intérieur de la TOC (Si le compteur a démarré)
-        // Pour éviter que le compteur ne continue à monter pendant le jeu, on force aussi la barrière TRACK == 00 ici
-        (request_counter > 0 && ((SUBQBuffer[0] & 0x0000FF00) == 0x00000000) && (
-            ((SUBQBuffer[0] & 0x000000FF) == 0x00000001) || // Secteur Audio 01
-            ((SUBQBuffer[0] & 0x000000D0) == 0x00000040)    // Secteur Data
-        ))
-    ) 
-    {
-        request_counter++; 
-        return;
+    // --- STEP 0: Data/TOC Validation ---
+    uint32_t isDataSector = ((reg0 & 0x000000D0) == 0x00000040);
+
+    // --- STEP 1: SUBQ Frame Synchronization ---
+    if (((reg0 & 0x0000FF00) == 0) && ((reg1 & 0x00FF0000) == 0)) {
+
+        // Condition A : Mode DATA + Analyse de la zone TOC
+        if (isDataSector) {
+            // INDEX >= A0
+            if ((reg0 & 0x00FF0000) >= 0x00A00000) {
+                
+                // SPÉCIFICITÉ SCPH-5903 (VCD GATING)
+                #ifdef SCPH_5903
+                // Si MIN (bits 24-31) vaut 0x02, c'est un flux VCD, on applique le decay (on passe outre)
+                if ((reg0 & 0xFF000000) == 0x02000000) {
+                    // Sort du if sans incrémenter le compteur pour déclencher le Decay du STEP 2
+                } else {
+                    request_counter++;
+                    return;
+                }
+                #else
+                // Modèles standards : incrémentation directe et immédiate
+                request_counter++;
+                return;
+                #endif
+            }
+            
+            // INDEX == 01 ET calcul wrap-around d'origine strict sur 32 bits
+            if (((reg0 & 0x00FF0000) == 0x00010000) && 
+                (((((reg0 & 0xFF000000) - 0x03000000) & 0xFF000000) >= 0xF5000000))) {
+                request_counter++;
+                return;
+            }
+        }
+
+        // Condition B : Maintien du Tracking Lock
+        if (request_counter > 0) {
+            if ((reg0 & 0x000000FF) == 0x00000001 || isDataSector) {
+                request_counter++;
+                return;
+            }
+        }
     }
 
-
-    // --- STEP 2: SIGNAL DECAY (Décrémentation directe) ---
-    // Si on arrive ici, c'est que la trame est valide (CRC OK) mais qu'elle provient 
-    // de la zone de jeu (Track 01 active). Le compteur va descendre jusqu'à 0 pour couper l'injection.
+    // --- STEP 2: Signal Decay ---
     if (request_counter > 0) {
         request_counter--; 
     }
 }
-
 
 
 
@@ -623,48 +610,86 @@ void FilterSUBQSamples(void) {
  *       both speeds as it syncs directly to the physical WFCK edges.
  *********************************************************************************************/
 
+
 void PerformInjectionSequence(uint8_t injectSCEx) {
-    // SCEx codes converted to 64-bit (44 effective bits used)
-    static const uint64_t scex_patterns[] = {
-        0x000002EAD5B24D99ULL, // SCEI (NTSC-J)
-        0x000002FAD5B24D99ULL, // SCEA (NTSC-U/C)
-        0x000002DAD5B24D99ULL  // SCEE (PAL)
-    };
+  // OPTIMISATION : Tableau aligné sur la largeur native des registres ARM 32-bit
+  // Mot 0 = bits 0-31 (octets 0, 1, 2, 3 packés) | Mot 1 = bits 32-43 (octets 4, 5 packés)
+  static const uint32_t allRegionsSCEx[3][2] = {
+      { 0x5D4BC959, 0x000002DA }, // SCEI (Jap)
+      { 0x5D4BC959, 0x000002FA }, // SCEA (USA)
+      { 0x5D4BC959, 0x000002EA }  // SCEE (PAL)
+  };
 
-    // Note: Legacy Gate Mode (wfck_mode 0) is typically handled by a secondary 
-    // PIO program or a dedicated delay loop. This function focuses on 
-    // WFCK-based modulation (PU-22+).
-    if (!wfck_mode) {
-        // Implementation for Legacy/Gate mode can be added here if needed
-    }
+  const uint32_t BIT_DELAY = 4000;
 
-    // Region cycle loop (handles Universal mode if injectSCEx == 3)
-    for (uint8_t regionCycle = 0; regionCycle < 3; regionCycle++) {
-        uint8_t regionIndex = (injectSCEx == 3) ? regionCycle : injectSCEx;
-        uint64_t pattern = scex_patterns[regionIndex];
+  gpio_set_dir(PIN_DATA, GPIO_OUT);  
+  gpio_put(PIN_DATA, 0);   
 
-        // Send 44 bits to the PIO FIFO
-        // The PIO consumes bits one-by-one and handles the 30 WFCK pulses per bit
-        for (int i = 0; i < 44; i++) {
-            uint32_t bit = (pattern >> i) & 0x01;
-            pio_sm_put_blocking(pioSUBQ, smSUBQ, bit);
+  if (!wfck_mode) { 
+    gpio_set_dir(PIN_WFCK, GPIO_OUT);  
+    gpio_put(PIN_WFCK, 0);  
+  }
+
+  for (uint32_t regionCycle = 0; regionCycle < 3; regionCycle++) {
+    uint32_t regionIndex = (injectSCEx == 3) ? regionCycle : (uint32_t)injectSCEx;
+
+    // OPTIMISATION CHIRURGICALE : On extrait les deux mots de la région dans des registres CPU locaux
+    uint32_t w0 = allRegionsSCEx[regionIndex][0];
+    uint32_t w1 = allRegionsSCEx[regionIndex][1];
+
+    for (uint32_t bitPosition = 0; bitPosition < 44; bitPosition++) {
+      // Extraction ultra-rapide sans aucune division, reste 100% synchrone
+      // Si bitPosition < 32 (0 à 31), on lit w0. Sinon (32 à 43), on lit w1.
+      uint32_t currentBit = (bitPosition < 32) ? ((w0 >> bitPosition) & 0x01) 
+                                               : ((w1 >> (bitPosition - 32)) & 0x01);
+
+      if (wfck_mode) {
+        /* METHOD 1: PULSE COUNTING (WFCK SYNC) - Inchangée et Vitale */
+        for (uint32_t count = 30; count > 0; count--) {
+          while (gpio_get(PIN_WFCK));
+          gpio_put(PIN_DATA, 0); 
+
+          while (!gpio_get(PIN_WFCK));
+          if (currentBit) {
+            gpio_put(PIN_DATA, 1); 
+          }
         }
-
-        // If not in Universal mode, exit after the first successful pattern
-        if (injectSCEx != 3) break;
-        
-        // Inter-region delay for Universal mode
-        sleep_ms(90); 
+      } 
+      else {
+        /* METHOD 2: TIME REFERENCE (FIXED DELAY) */
+        if (currentBit == 0) {
+          gpio_put(PIN_DATA, 0);
+          gpio_set_dir(PIN_DATA, GPIO_OUT);
+        } else {
+          gpio_set_dir(PIN_DATA, GPIO_IN);
+        }
+        busy_wait_us_32(BIT_DELAY); 
+      }
     }
 
-    // Release the data bus
-    gpio_disable_pulls(PIN_DATA); 
+    if (injectSCEx != 3) {
+      gpio_set_dir(PIN_DATA, GPIO_OUT);
+      gpio_put(PIN_DATA, 0);
 
-    #ifdef LED_RUN
-        PIN_LED_OFF;
-    #endif
+      if (!wfck_mode) {
+        gpio_set_dir(PIN_WFCK, GPIO_IN);  
+      }
+      break; 
+    }
+
+    gpio_set_dir(PIN_DATA, GPIO_OUT); 
+    gpio_put(PIN_DATA, 0);
+    sleep_ms(90); 
+  }
+
+  if (!wfck_mode) {
+    gpio_set_dir(PIN_WFCK, GPIO_IN);  
+  }
+
+  #if defined(DEBUG_SERIAL_MONITOR)
+    InjectLog();
+  #endif
 }
-
 
 
 /**
@@ -777,7 +802,7 @@ int main() {
         } 
         else { // request_counter >= REQUEST_INJECT_TRIGGER
             // Injection state: Solid Blue flash
-            SetLED(LED_BLUE); 
+            SetLEDDynamic(LED_BLUE, 120); 
             
             // Execute the SCEx injection burst
             PerformInjectionSequence(INJECT_SCEx);      

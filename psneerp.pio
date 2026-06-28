@@ -88,36 +88,39 @@ capture_loop:
 ; 5. INJECTION SCEx (Modulation DATA basée sur WFCK)
 ; =============================================================================
 .program scex_inject
-.side_set 1 opt     ; Pin DATA
 
-; Pin 0 (IN) : WFCK
-.wrap_target
-    out x, 1                ; Récupère 1 bit du FIFO CPU
-    jmp !x send_zero        ; Si bit == 0, branchement
-    
-    ; --- Mode bit 1 (Modulation) ---
-    set y, 29               
-bit1_loop:
-    wait 0 pin 0            
-    nop side 0              
-    wait 1 pin 0            
-    nop side 1              
-    ; ... (fin de bit1_loop)
-    jmp y-- bit1_loop
-    jmp force_wrap          ; <-- On saute ici
+; Broche OUT : DATA
+; Broche IN  : WFCK (Index 0 du groupe in_pins)
 
-send_zero:
-    set y, 29
-bit0_loop:
-    wait 0 pin 0            
-    nop side 0              
-    wait 1 pin 0            
-    nop side 0              
-    jmp y-- bit0_loop
+entry_point:
+    set y, 31            ; Compteur pour les 32 bits du premier mot (31 à 0)
+bit_loop_32:
+    out pins, 1          ; Extrait 1 bit et l'applique sur la broche DATA
+    set x, 29            ; Compteur pour 30 oscillations (29 à 0)
+pulse_loop_32:
+    wait 1 pin 0         ; Attend le flanc montant de WFCK
+    wait 0 pin 0         ; Attend le flanc descendant de WFCK
+    jmp x-- pulse_loop_32
+    jmp y-- bit_loop_32  ; Boucle sur les 32 bits
+
+    ; --- PASSAGE AU MOT DE 12 BITS RESTANTS ---
+    set y, 11            ; Compteur pour les 12 bits restants (11 à 0)
+bit_loop_12:
+    out pins, 1          ; Extrait 1 bit et l'applique sur la broche DATA
+    set x, 29            ; Compteur pour 30 oscillations
+pulse_loop_12:
+    wait 1 pin 0         ; Attend le flanc montant de WFCK
+    wait 0 pin 0         ; Attend le flanc descendant de WFCK
+    jmp x-- pulse_loop_12
+    jmp y-- bit_loop_12  ; Boucle sur les 12 bits
+
+    ; --- FIN STRICHTE DES 44 BITS ---
+    set pins, 0          ; Repasse immédiatement la broche DATA à 0
     
-force_wrap:                 ; <-- L'étiquette pointe sur une instruction
-    nop                     ; <-- On ajoute un NOP pour que l'adresse existe
-.wrap
+idle_block:
+    jmp idle_block       ; Boucle infinie locale sécurisée. 
+                         ; Bloque le PIO ici pour l'empêcher de lire les 20 zéros restants.
+    
 
 
 
@@ -125,29 +128,7 @@ force_wrap:                 ; <-- L'étiquette pointe sur une instruction
 % c-sdk {
 #include "hardware/clocks.h"
 
-// 1. UART TX Initialization
-static inline void uart_tx_program_init(PIO pio, uint sm, uint offset, uint pin, uint baud) {
-    pio_gpio_init(pio, pin);
-    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true); // Pin en sortie
 
-    pio_sm_config c = uart_tx_program_get_default_config(offset);
-    
-    // Configurer la pin pour OUT et SIDE-SET
-    sm_config_set_out_pins(&c, pin, 1);
-    sm_config_set_sideset_pins(&c, pin);
-
-    // UART standard : Droite (true), Autopull activé (true), Seuil 8 bits
-    sm_config_set_out_shift(&c, true, true, 8); 
-    
-    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
-
-    // 8 cycles par bit (selon les [7] et [6] dans le code PIO)
-    float div = (float)clock_get_hz(clk_sys) / (8 * baud);
-    sm_config_set_clkdiv(&c, div);
-
-    pio_sm_init(pio, sm, offset, &c);
-    pio_sm_set_enabled(pio, sm, true);
-}
 
 
 // 2. WS2812 LED Initialization
@@ -202,14 +183,14 @@ static inline void bios_patch_switch_source(PIO pio, uint sm, uint pin) {
 }
 
 
-// 4. SUBQ CAPTURE Initialization
+// 4. SUBQ CAPTURE Initialization 
 static inline void subq_capture_program_init(PIO pio, uint sm, uint offset, uint pin_subq, uint pin_sqck) {
     pio_sm_config c = subq_capture_program_get_default_config(offset);
     
     sm_config_set_in_pins(&c, pin_subq);  
     
-    // CORRECTIF : false = Shift-Left (MSB-First) pour aligner l'ordre des octets natifs
-    sm_config_set_in_shift(&c, false, true, 32); 
+    // ON NE TOUCHE PLUS : Configuration d'origine exacte
+    sm_config_set_in_shift(&c, true, true, 32); 
     
     sm_config_set_clkdiv(&c, 1.0f);
 
@@ -221,35 +202,39 @@ static inline void subq_capture_program_init(PIO pio, uint sm, uint offset, uint
     pio_sm_set_consecutive_pindirs(pio, sm, pin_subq, 1, false);
     pio_sm_set_consecutive_pindirs(pio, sm, pin_sqck, 1, false);
     
+    // AJOUT DE SÉCURITÉ : On réinitialise la machine pour nettoyer l'ISR bloqué
+    pio_sm_restart(pio, sm);
+    pio_sm_clear_fifos(pio, sm);
+    
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);
 }
+
+
 
 // 5. SCEx SIGNAL INJECTION Initialization
 static inline void scex_inject_program_init(PIO pio, uint sm, uint offset, uint pin_data, uint pin_wfck) {
     pio_gpio_init(pio, pin_data);
     pio_gpio_init(pio, pin_wfck);
     
-    // Set DATA as output and WFCK as input
-    pio_sm_set_consecutive_pindirs(pio, sm, pin_data, 1, true);
-    pio_sm_set_consecutive_pindirs(pio, sm, pin_wfck, 1, false);
-
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_data, 1, true);  // DATA en sortie
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_wfck, 1, false); // WFCK en entrée
+    
     pio_sm_config c = scex_inject_program_get_default_config(offset);
     
-    // Configure OUT and Side-set pins for DATA bus
     sm_config_set_out_pins(&c, pin_data, 1);
-    sm_config_set_sideset_pins(&c, pin_data);
+    sm_config_set_set_pins(&c, pin_data, 1); // Nécessaire pour l'instruction 'set pins, 0'
+    sm_config_set_in_pins(&c, pin_wfck);     // Pour l'instruction 'wait pin 0'
     
-    // Configure IN pins for WFCK synchronization (wait pin 0)
-    sm_config_set_in_pins(&c, pin_wfck);
-    
-    // Shift Right (LSB first), Autopull ENABLED, 32-bit threshold
+    // Shift-Right (true), Autopull ACTIVÉ (true), seuil à 32 bits
     sm_config_set_out_shift(&c, true, true, 32);
-
-    // Apply configuration and enable State Machine
+    sm_config_set_clkdiv(&c, 1.0f);
+    
     pio_sm_init(pio, sm, offset, &c);
-    pio_sm_set_enabled(pio, sm, true);
 }
+
+
+
 
 %}
 
