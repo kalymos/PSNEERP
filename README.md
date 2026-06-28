@@ -10,8 +10,9 @@
 | Card detection | OK |
 | SUBQ reading | OK |
 | SUBQ filter | OK |
-| Region code injection | To do |
+| Region code injection | OK |
 | BIOS patch | To do |
+| region selection and bios patch, post compilation|  To do |
 | CMake | To clean up / To do* |
 
 *\*Note: If anyone wants to take over the CMake cleanup, help is welcome!*
