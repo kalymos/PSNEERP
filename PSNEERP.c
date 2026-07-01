@@ -40,10 +40,7 @@
  *                           Options
  *******************************************************************************************************************/
 
- // --- Hardware Pins ---
-#define LED_PIN  16  // Default for Waveshare Pico Zero
-
-#define REQUEST_INJECT_TRIGGER 15 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
+#define REQUEST_INJECT_TRIGGER 20 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
 /*
  * TRIGGER CALIBRATION:
  * - Lower values (<5): Possible, but not beneficial.
@@ -52,14 +49,14 @@
  * - Higher values (15-20-25-30): Possible for older or weak CD-ROM laser units.
  */
 
- #define REQUEST_INJECT_GAP 5      // Stealth interval (must be 4-8 AND < REQUEST_INJECT_TRIGGER)
+ #define REQUEST_INJECT_GAP 8      // Stealth interval (must be 4-8 AND < REQUEST_INJECT_TRIGGER)
 /*
  * NOTE: REQUEST_INJECT_GAP defines the "cool-off" period between injections.
  * - Optimal range: 4 to 8 (for natural CD timing & anti-mod bypass).
  * - Constraint: Must ALWAYS be lower than REQUEST_INJECT_TRIGGER.
  */
 
- #define PATCH_SWITCHE    // This allows the user to disable the BIOS patch on-the-fly.
+// #define PATCH_SWITCHE    // This allows the user to disable the BIOS patch on-the-fly.
 /*
  * This allows you to bypass the memory card blocking problems on the SCPH-7000.
  * - Configure Pin D5 as Input.
@@ -67,7 +64,7 @@
  * - Exit immediately the patch BIOS if the switch pulls the pin to GND
  */
 
- #define DEBUG_SERIAL_MONITOR  // Enables serial monitor output. 
+// #define DEBUG_SERIAL_MONITOR  // Enables serial monitor output. 
 /*
 
  *
@@ -622,13 +619,6 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
 
   const uint32_t BIT_DELAY = 4000;
 
-  gpio_set_dir(PIN_DATA, GPIO_OUT);  
-  gpio_put(PIN_DATA, 0);   
-
-  if (!wfck_mode) { 
-    gpio_set_dir(PIN_WFCK, GPIO_OUT);  
-    gpio_put(PIN_WFCK, 0);  
-  }
 
   for (uint32_t regionCycle = 0; regionCycle < 3; regionCycle++) {
     uint32_t regionIndex = (injectSCEx == 3) ? regionCycle : (uint32_t)injectSCEx;
@@ -644,7 +634,7 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
                                                : ((w1 >> (bitPosition - 32)) & 0x01);
 
       if (wfck_mode) {
-        /* METHOD 1: PULSE COUNTING (WFCK SYNC) - Inchangée et Vitale */
+        /* METHOD 1: PULSE COUNTING (WFCK SYNC) -  */
         for (uint32_t count = 30; count > 0; count--) {
           while (gpio_get(PIN_WFCK));
           gpio_put(PIN_DATA, 0); 
@@ -655,35 +645,27 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
           }
         }
       } 
+
+      
       else {
         /* METHOD 2: TIME REFERENCE (FIXED DELAY) */
         if (currentBit == 0) {
           gpio_put(PIN_DATA, 0);
-          gpio_set_dir(PIN_DATA, GPIO_OUT);
         } else {
-          gpio_set_dir(PIN_DATA, GPIO_IN);
+          gpio_put(PIN_DATA, 1);
         }
         busy_wait_us_32(BIT_DELAY); 
+      }
+
+      if(injectSCEx == 3 && bitPosition >= 43 ){
+        gpio_put(PIN_DATA, 0);
+          sleep_ms(90);
       }
     }
 
     if (injectSCEx != 3) {
-      gpio_set_dir(PIN_DATA, GPIO_OUT);
-      gpio_put(PIN_DATA, 0);
-
-      if (!wfck_mode) {
-        gpio_set_dir(PIN_WFCK, GPIO_IN);  
-      }
       break; 
     }
-
-    gpio_set_dir(PIN_DATA, GPIO_OUT); 
-    gpio_put(PIN_DATA, 0);
-    sleep_ms(90); 
-  }
-
-  if (!wfck_mode) {
-    gpio_set_dir(PIN_WFCK, GPIO_IN);  
   }
 
   #if defined(DEBUG_SERIAL_MONITOR)
@@ -756,7 +738,7 @@ void Init() {
 
 int main() {
     stdio_init_all();
-    //init_debug();
+
     Init();
 
     // --- Critical Boot Patching ---
@@ -778,12 +760,16 @@ int main() {
     pio_sm_set_enabled(pioSUBQ, smSUBQ, true);   // Relance le PIO propre pour le direct
     
     while (true) {
+
+        
         // Timing Sync: Prevent reading the tail end of the previous SUBQ packet
         //sleep_ms(1);        
 
         // DATA ACQUISITION: Capture the 12-byte SUBQ stream
         CaptureSUBQ();       
 
+        gpio_set_dir(PIN_DATA, GPIO_OUT);  
+        gpio_put(PIN_DATA, 0);   
         // FILTERING: Analyze buffer and update request_counter
         FilterSUBQSamples();
 

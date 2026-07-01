@@ -14,7 +14,7 @@
 #define PIN_SUBQ                    4   
 #define PIN_DATA                    5   
 #define PIN_WFCK                    6   
-
+#define LED_PIN                     16  // Default for Waveshare Pico Zero
 
 
 
