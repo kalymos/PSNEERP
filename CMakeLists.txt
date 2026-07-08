@@ -117,3 +117,9 @@ pico_enable_stdio_uart(PSNEERP 1)
 get_target_property(PICO_SOURCES PSNEERP SOURCES)
 list(REMOVE_ITEM PICO_SOURCES "/home/psnee/.pico-sdk/sdk/2.2.0/src/rp2_common/pico_cxx_options/new_delete.cpp")
 set_target_properties(PSNEERP PROPERTIES SOURCES "${PICO_SOURCES}")
+
+add_custom_command(TARGET PSNEERP PRE_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo 'Welcome to the :Playstation System Nee Extended Experience Recursive Paradigm:'
+    COMMENT "Displaying project banner"
+)
+

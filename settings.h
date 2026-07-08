@@ -230,14 +230,18 @@ void InjectLog() {
 #define STRING2(x) #x
 #define STRING(x) STRING2(x)
 
-#pragma message("Led pin: " STRING(LED_PIN))
-#pragma message("Inject Trigger: " STRING(REQUEST_INJECT_TRIGGER))
-#pragma message("Inject Gap: " STRING(REQUEST_INJECT_GAP))
+// #pragma message "Welcome to the :Playstation System Nee Extended Experience Recursive Paradigm:"
 
 
-#ifdef DEBUG_SERIAL_MONITOR
-  #pragma message "Feature: Serial Debug Monitor ENABLED"
-#endif
+
+// #pragma message "Led pin:  STRING(LED_PIN)"
+// #pragma message "Inject Trigger:  STRING(REQUEST_INJECT_TRIGGER)"
+// #pragma message "Inject Gap:  STRING(REQUEST_INJECT_GAP)"
+
+
+// #ifdef DEBUG_SERIAL_MONITOR
+//   #pragma message "Feature: Serial Debug Monitor ENABLED"
+// #endif
 
 #ifdef PATCH_SWITCHE
   #pragma message "PATCH_SWITCHE selected"
