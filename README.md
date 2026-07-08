@@ -11,8 +11,9 @@
 | SUBQ reading | OK |
 | SUBQ filter | OK |
 | Region code injection | OK |
+| region selection and trogger, post compilation|  OK |
 | BIOS patch | To do |
-| region selection and bios patch, post compilation|  To do |
+| BIOS patch, post compilation|  To do |
 | CMake | To clean up / To do* |
 
 *\*Note: If anyone wants to take over the CMake cleanup, help is welcome!*
