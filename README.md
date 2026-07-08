@@ -1,5 +1,6 @@
 # PSNEERP
-# The project is in alpha stage and is not yet functional.
+# The project is currently in beta stage.
+## Basic functionalities are implemented, including dynamic hardware configuration and precompiled binaries for the RP2040 Zero.
 
 
 
