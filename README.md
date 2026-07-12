@@ -1,5 +1,6 @@
 # PSNEERP
-# The project is in alpha stage and is not yet functional.
+# The project is currently in beta stage.
+## Basic functionalities are implemented, including dynamic hardware configuration and precompiled binaries for the RP2040 Zero.
 
 
 
@@ -11,8 +12,9 @@
 | SUBQ reading | OK |
 | SUBQ filter | OK |
 | Region code injection | OK |
+| Region selection and trigger, post compilation|  OK |
 | BIOS patch | To do |
-| region selection and bios patch, post compilation|  To do |
+| BIOS patch, post compilation|  To do |
 | CMake | To clean up / To do* |
 
 *\*Note: If anyone wants to take over the CMake cleanup, help is welcome!*

@@ -9,7 +9,7 @@
            Specific parameter section for BIOS patches
 ------------------------------------------------------------------------------------------------*/
 
-
+#if CONFIG_MODE_STATIC
 
   // ------ SCPH 100 / 102 ------
   #if defined(SCPH_100) || \
@@ -102,7 +102,7 @@
   #define INJECT_SCEx 3   // Universal: NTSC-J -> NTSC-U/C -> PAL
 
 #endif
-
+#endif
 /*------------------------------------------------------------------------------------------------
                serial debug section
 ------------------------------------------------------------------------------------------------*/
@@ -123,13 +123,21 @@ extern volatile uint32_t SUBQBuffer[3];
  ******************************************************************************************/
 void CaptureSUBQLog(bool crc_valid) {
     static bool header_printed = false;
+    static uint32_t last_log_time = 0;
+    uint32_t now = time_us_32();
+    
     if (!header_printed) {
         header_printed = true;
-        printf(" %-57s | %-10s\n", "RAW", "ASCII");
-        printf(" %-4s | %-3s | %-20s | %-4s | %-6s | %-9s | %-56s | %-10s\n", 
-           "CTRL", "ADR", "DATA", "CRC", "MODE", "TNO INDEX", "DETAILS", "COUNTER");
-        printf("---------------------------------------------------------------------------------------------------------------------\n");
+        // Ajustement des en-têtes pour inclure TIMESTAMP (ms) et DELTA (us)
+        printf(" %-19s | %-57s | %-10s\n", "TIME", "RAW", "ASCII");
+        printf(" %-8s | %-6s | %-4s | %-3s | %-20s | %-4s | %-6s | %-9s | %-56s | %-10s\n", 
+           "TIME(ms)", "D(us)", "CTRL", "ADR", "DATA", "CRC", "MODE", "TNO INDEX", "DETAILS", "COUNTER");
+        printf("-----------------------------------------------------------------------------------------------------------------------------------------\n");
     }
+
+    // --- AFFICHAGE DU TIMER ---
+    printf(" %-8u | %-6u | ", now / 1000, (last_log_time == 0) ? 0 : (now - last_log_time));
+    last_log_time = now;
 
     // --- ANALYSE ET DECOUPAGE NATIF ALIGNE (LSB to MSB) ---
     uint8_t c0  = SUBQBuffer[0] & 0xFF;         
@@ -198,9 +206,9 @@ void BoardDetectionLog(uint32_t window, uint8_t mode, uint32_t inject) {
     
     if (mode == 0)      printf("0 (Legacy / GATE High)\n");
     else if (mode == 1) printf("1 (Frequency Active)\n");
-    else                printf("2 (Error / Stuck Low)\n");
+
     
-    printf(" -> Inject Trigger   : %u\n", inject);
+    printf(" -> INJECT_SCEx   : %u\n", inject);
     printf("---------------------------------------\n\n");
 }
 
@@ -222,58 +230,62 @@ void InjectLog() {
 #define STRING2(x) #x
 #define STRING(x) STRING2(x)
 
-#pragma message("Led pin: " STRING(LED_PIN))
-#pragma message("Inject Trigger: " STRING(REQUEST_INJECT_TRIGGER))
-#pragma message("Inject Gap: " STRING(REQUEST_INJECT_GAP))
+// #pragma message "Welcome to the :Playstation System Nee Extended Experience Recursive Paradigm:"
 
 
-#ifdef DEBUG_SERIAL_MONITOR
-  #pragma message "Feature: Serial Debug Monitor ENABLED"
-#endif
+
+// #pragma message "Led pin:  STRING(LED_PIN)"
+// #pragma message "Inject Trigger:  STRING(REQUEST_INJECT_TRIGGER)"
+// #pragma message "Inject Gap:  STRING(REQUEST_INJECT_GAP)"
+
+
+// #ifdef DEBUG_SERIAL_MONITOR
+//   #pragma message "Feature: Serial Debug Monitor ENABLED"
+// #endif
 
 #ifdef PATCH_SWITCHE
   #pragma message "PATCH_SWITCHE selected"
 #endif
 
 
-// Show target console.
-#if defined(SCPH_1000)
-  #pragma message "SCPH_1000 NTSC-J"
-#elif defined(SCPH_3000)
-  #pragma message "SCPH_3000 NTSC-J"
-#elif defined(SCPH_3500_5000_5500)
-  #pragma message "SCPH_3500_5000_5500 NTSC-J"
-#elif defined(SCPH_7000_7500_9000)
-  #pragma message "SCPH_7000_7500_9000 NTSC-J"
-#elif defined(SCPH_100)
-  #pragma message "SCPH_100 NTSC-J"
-#elif defined(SCPH_102)
-  #pragma message "SCPH_102 PAL"
-#elif defined(SCPH_xxx1)
-  #pragma message "SCPH_xxx1 Generic NTSC-U/C"
-#elif defined(SCPH_xxx2)
-  #pragma message "SCPH_xxx2 Generic PAL"
-#elif defined(SCPH_xxx3)
-  #pragma message "SCPH_xxx3 Generic NTSC-J"
-#elif defined(SCPH_5903)
-  #pragma message "SCPH-5903 Video CD Dual-Interface"
-#elif defined(SCPH_xxxx)
-  #pragma message "SCPH_xxxx Universal Region Mode"
-#else
-  // Error if no console is uncommented
-  #error "Console not selected! Please uncomment one SCPH model."
-#endif
+// // Show target console.
+//   #if defined(SCPH_1000)
+//     #pragma message "SCPH_1000 NTSC-J"
+//   #elif defined(SCPH_3000)
+//     #pragma message "SCPH_3000 NTSC-J"
+//   #elif defined(SCPH_3500_5000_5500)
+//     #pragma message "SCPH_3500_5000_5500 NTSC-J"
+//   #elif defined(SCPH_7000_7500_9000)
+//     #pragma message "SCPH_7000_7500_9000 NTSC-J"
+//   #elif defined(SCPH_100)
+//     #pragma message "SCPH_100 NTSC-J"
+//   #elif defined(SCPH_102)
+//     #pragma message "SCPH_102 PAL"
+//   #elif defined(SCPH_xxx1)
+//     #pragma message "SCPH_xxx1 Generic NTSC-U/C"
+//   #elif defined(SCPH_xxx2)
+//     #pragma message "SCPH_xxx2 Generic PAL"
+//   #elif defined(SCPH_xxx3)
+//     #pragma message "SCPH_xxx3 Generic NTSC-J"
+//   #elif defined(SCPH_5903)
+//     #pragma message "SCPH-5903 Video CD Dual-Interface"
+//   #elif defined(SCPH_xxxx)
+//     #pragma message "SCPH_xxxx Universal Region Mode"
+//   #else
+//   // Error if no console is uncommented
+//   #error "Console not selected! Please uncomment one SCPH model."
+// #endif
 
 
 
-// SECURITY CHECK: Ensure only one console is selected
-// If you get "not portable" warnings here, it's only because multiple models are active.
-#if (defined(SCPH_1000) + defined(SCPH_3000) + defined(SCPH_3500_5000_5500) + \
-     defined(SCPH_7000_7500_9000) + defined(SCPH_100) + \
-     defined(SCPH_102) + defined(SCPH_xxx1) + defined(SCPH_xxx2) + \
-     defined(SCPH_xxx3) + defined(SCPH_5903) + defined(SCPH_xxxx)) > 1
-  #error "Too many consoles selected! Please uncomment ONLY ONE model."
-#endif
+// // SECURITY CHECK: Ensure only one console is selected
+// // If you get "not portable" warnings here, it's only because multiple models are active.
+// #if (defined(SCPH_1000) + defined(SCPH_3000) + defined(SCPH_3500_5000_5500) + \
+//      defined(SCPH_7000_7500_9000) + defined(SCPH_100) + \
+//      defined(SCPH_102) + defined(SCPH_xxx1) + defined(SCPH_xxx2) + \
+//      defined(SCPH_xxx3) + defined(SCPH_5903) + defined(SCPH_xxxx)) > 1
+//   #error "Too many consoles selected! Please uncomment ONLY ONE model."
+// #endif
 
 
 

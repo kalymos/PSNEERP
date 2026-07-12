@@ -1,7 +1,15 @@
 //                           P.S.N.E.E.R.P. 0.1
+
+// ==========================================
+// LE COMMUTATEUR CENTRAL (1: Avant compilation / 0: Par les Pins)
+// ==========================================
+#define CONFIG_MODE_STATIC 0 
+
+#if CONFIG_MODE_STATIC
 /*********************************************************************************************************************
  *   CONSOLE MODEL SELECTION (SCPH Hardware Configuration)
  *********************************************************************************************************************/
+
 /*--------------------------------------------------------------------------------------------------------------------
  * Models below do not require BIOS patching. 
  * Standard USB injection is supported.
@@ -9,7 +17,7 @@
  *  SCPH model number //  region code | region
  *--------------------------------------------------------------------------------------------------------------------*/
 // #define SCPH_xxx1  //  NTSC U/C    | America.
- #define SCPH_xxx2  //  PAL         | Europ.
+// #define SCPH_xxx2  //  PAL         | Europ.
 // #define SCPH_xxx3  //  NTSC J      | Asia.
 // #define SCPH_xxxx  //  Universal
 
@@ -40,7 +48,7 @@
  *                           Options
  *******************************************************************************************************************/
 
-#define REQUEST_INJECT_TRIGGER 20 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
+//#define REQUEST_INJECT_TRIGGER 20 // Now coupled with REQUEST_INJECT_GAP; allows for higher trigger
 /*
  * TRIGGER CALIBRATION:
  * - Lower values (<5): Possible, but not beneficial.
@@ -48,8 +56,10 @@
  *   This causes problems with disks that have anti-mod protection; it's less noticeable on other models.
  * - Higher values (15-20-25-30): Possible for older or weak CD-ROM laser units.
  */
+#endif
 
- #define REQUEST_INJECT_GAP 8      // Stealth interval (must be 4-8 AND < REQUEST_INJECT_TRIGGER)
+
+ #define REQUEST_INJECT_GAP 6      // Stealth interval (must be 4-8 AND < REQUEST_INJECT_TRIGGER)
 /*
  * NOTE: REQUEST_INJECT_GAP defines the "cool-off" period between injections.
  * - Optimal range: 4 to 8 (for natural CD timing & anti-mod bypass).
@@ -64,7 +74,7 @@
  * - Exit immediately the patch BIOS if the switch pulls the pin to GND
  */
 
-// #define DEBUG_SERIAL_MONITOR  // Enables serial monitor output. 
+ #define DEBUG_SERIAL_MONITOR  // Enables serial monitor output. 
 /*
 
  *
@@ -81,6 +91,7 @@
  *******************************************************************************************************************/
 
 #include "MCU.h"
+#include <stdint.h>
 #include "settings.h"
 #include "psneerp.pio.h"
 #include "pico/multicore.h"
@@ -92,7 +103,7 @@
 uint offsetPATCH;  
 
 
-// --- PROTOTYPES DES FONCTIONS ---
+
 // --- PROTOTYPES DES FONCTIONS ---
 void BoardDetection(void); // Votre fonction principale de détection (sans paramètre)
 void BoardDetectionLog(uint32_t window, uint8_t mode, uint32_t inject); // La vraie fonction de log à 3 paramètres
@@ -123,6 +134,10 @@ volatile uint8_t wfck_mode = 0; // 0 = Standard / Détection automatique
 // Variables de contrôle d'injection d'origine
 volatile uint32_t request_counter = 0;
 
+#if !CONFIG_MODE_STATIC
+volatile uint32_t INJECT_SCEx = 3;
+volatile uint32_t REQUEST_INJECT_TRIGGER = 20;
+#endif
 
 
  #if defined(DEBUG_SERIAL_MONITOR)
@@ -687,6 +702,10 @@ void Init() {
     gpio_init(PIN_WFCK);
     gpio_init(PIN_SQCK);
     gpio_init(PIN_SUBQ);
+    gpio_init(PIN_TRIGGER_A);
+    gpio_init(PIN_TRIGGER_B);
+    gpio_init(PIN_REGION_A);
+    gpio_init(PIN_REGION_B);
 
     // Disable internal pulls to avoid interference with the console's logic levels
     gpio_disable_pulls(PIN_DATA);
@@ -694,10 +713,19 @@ void Init() {
     gpio_disable_pulls(PIN_SQCK);
     gpio_disable_pulls(PIN_SUBQ);
 
+    gpio_pull_down(PIN_TRIGGER_A);
+    gpio_pull_down(PIN_TRIGGER_B);
+    gpio_pull_down(PIN_REGION_A);
+    gpio_pull_down(PIN_REGION_B);
+
     // Set directions
     gpio_set_dir(PIN_WFCK, GPIO_IN);
     gpio_set_dir(PIN_SQCK, GPIO_IN);
     gpio_set_dir(PIN_SUBQ, GPIO_IN);
+    gpio_set_dir(PIN_TRIGGER_A, GPIO_IN);
+    gpio_set_dir(PIN_TRIGGER_B, GPIO_IN);
+    gpio_set_dir(PIN_REGION_A, GPIO_IN);
+    gpio_set_dir(PIN_REGION_B, GPIO_IN);
     
     #ifdef BIOS_PATCH
         // Hardware Patching Pins setup
@@ -733,6 +761,43 @@ void Init() {
     stdio_init_all();
     uart_init(uart0, 115200);
     gpio_set_function(0, GPIO_FUNC_UART);
+
+    // =========================================================================
+    // DÉTECTION DYNAMIQUE DE LA RÉGION (Si CONFIG_MODE_STATIC vaut 0)
+    // =========================================================================
+    #if !CONFIG_MODE_STATIC
+    // 1. Lecture des états matériels (0 ou 1) via le SDK Pico
+    uint32_t REGION_val_B = gpio_get(PIN_REGION_B);
+    uint32_t REGION_val_A = gpio_get(PIN_REGION_A);
+    
+    // 2. Alignement binaire (B = bit 1, A = bit 0)
+    uint32_t REGION_index_BA = (REGION_val_B << 1) | REGION_val_A;
+    
+    // 3. Table de correspondance statique (LUT) 
+    // index_BA: 00->3 (Multi), 01->0 (Jap), 10->1 (USA), 11->2 (PAL)
+    static const uint8_t REGION_LUT_INJECT[] = {3, 0, 1, 2};
+    
+    // 4. Assignation directe à votre variable globale volatile
+    INJECT_SCEx = REGION_LUT_INJECT[REGION_index_BA];
+
+    // 1. Lecture des états matériels (0 ou 1) via le SDK Pico
+    uint32_t TRIGGER_val_B = gpio_get(PIN_TRIGGER_B);
+    uint32_t TRIGGER_val_A = gpio_get(PIN_TRIGGER_A);
+    
+    // 2. Alignement binaire (B = bit 1, A = bit 0)
+    uint32_t TRIGGER_index_BA = (TRIGGER_val_B << 1) | TRIGGER_val_A;
+    
+    // 3. Table de correspondance statique (LUT) 
+    
+    static const uint8_t TRIGGER_LUT_INJECT[] = {10, 15, 20, 25};
+    
+    // 4. Assignation directe à votre variable globale volatile
+    REQUEST_INJECT_TRIGGER = TRIGGER_LUT_INJECT[TRIGGER_index_BA];
+
+    // 5. Affichage simple de la variable
+    printf("REQUEST_INJECT_TRIGGER: %d\n", REQUEST_INJECT_TRIGGER);
+    
+    #endif
 }
 
 

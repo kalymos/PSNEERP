@@ -73,14 +73,14 @@ loop_override:
 
 .wrap_target
 start_sector:
-    wait 0 gpio 3        
-    wait 1 gpio 3        
-    wait 0 gpio 3        
-    wait 1 gpio 3        
+    wait 0 gpio 5        
+    wait 1 gpio 5        
+    wait 0 gpio 5        
+    wait 1 gpio 5        
 
 capture_loop:
-    wait 0 gpio 3        
-    wait 1 gpio 3        
+    wait 0 gpio 5        
+    wait 1 gpio 5        
     in pins, 1           
     jmp capture_loop     
 .wrap

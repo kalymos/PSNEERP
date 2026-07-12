@@ -10,10 +10,16 @@
 
 
 // Define pin numbers for the RP2040 - adjust these to match your wiring
-#define PIN_SQCK                    3   
-#define PIN_SUBQ                    4   
-#define PIN_DATA                    5   
-#define PIN_WFCK                    6   
+#define PIN_WFCK                    2 
+#define PIN_DATA                    3 
+#define PIN_SUBQ                    4 
+#define PIN_SQCK                    5   
+
+#define PIN_TRIGGER_A               26
+#define PIN_TRIGGER_B               27
+#define PIN_REGION_A                28
+#define PIN_REGION_B                29
+  
 #define LED_PIN                     16  // Default for Waveshare Pico Zero
 
 
