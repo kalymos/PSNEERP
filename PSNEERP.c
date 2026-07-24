@@ -99,6 +99,7 @@
 #include "hardware/pio.h"
 #include "hardware/uart.h" 
 #include "hardware/clocks.h"
+#include "hardware/gpio.h"
 
 uint offsetPATCH;  
 
@@ -120,13 +121,16 @@ volatile uint32_t SUBQBuffer[3] = {0, 0, 0};
 volatile uint32_t last_pulse_time = 0;
 volatile bool pio_glitch_detected = false;
 
-// Note : wfck_mode et request_counter sont déjà définis aux lignes 108/109.
-// Ne rajoutez aucune autre ligne les mentionnant ici pour éviter les "redefinition of".
 
 // INSTANCES MATÉRIELLES RP2040
 PIO pio = pio0;
 uint sm = 0;
 
+//--- bois patch variables ---
+static bool monitoring_active = false;
+static absolute_time_t global_window_end;
+static absolute_time_t inactivity_start;
+static int last_known_state = -1;
 
 // --- CONFIGURATION DU SIGNAL HORLOGE ---
 volatile uint8_t wfck_mode = 0; // 0 = Standard / Détection automatique
@@ -197,139 +201,71 @@ void SetLEDDynamic(uint32_t color, uint8_t intensity) {
 /****************************************************************************************
  * FUNCTION    : Bios_Patching()
  *
- * OPERATION   : Real-time Data Bus (DX) override via Address Bus (AX / AY)
- *
- * KEY PHASES:
- *    1. STABILIZATION & ALIGNMENT (AX): 
- *       Synchronizes the execution pointer with the AX rising edge to establish 
- *        a deterministic hardware timing reference.
- *
- *    2. SILENCE DETECTION (BOOT STAGE): 
- *       Validates consecutive silent windows (SILENCE_THRESHOLD) to identify 
- *       the specific boot stage before the target address call.
- *
- *    3. HARDWARE COUNTING & OVERDRIVE (AX): 
- *       Engages INT0 to count AX pulses. On the final pulse, triggers a 
- *       bit-aligned delay to force a custom state on the DX line.
- *
- *    4. SECONDARY SILENCE (GAP DETECTION): 
- *       If PHASE_TWO_PATCH is active, monitors for a secondary silent gap 
- *       (CONFIRM_COUNTER_TARGET_2) between patching windows.
- *
- *    5. SECONDARY OVERDRIVE (AY): 
- *       Engages INT1 (AY) for the final injection stage, synchronizing the 
- *       patch with the secondary memory address cycles.
- *
- *  CRITICAL TIMING & TIMER-LESS ALIGNMENT:
- *    - DETERMINISTIC SILENCE: Uses cycle-accurate polling to filter boot jitter 
- *      and PS1 initialization noise, replacing unstable hardware timers.
- *
- *    - CYCLE STABILIZATION (16MHz LIMIT): Uses '__builtin_avr_delay_cycles' to 
- *      prevent compiler reordering. At 16MHz, the CPU has zero margin; a single 
- *      instruction displacement would break high-speed bus alignment.
- *
+
  **************************************************************************************/
-
-
-#ifdef BIOS_PATCH
-
-volatile uint8_t patch_stage = 0; // Track patching progress
-uint smPATCH = 0;                 // PIO state machine ID for BIOS patching
-
-/**
- * PIO IRQ Handler: Increments patch stage when the PIO sends an interrupt
- */
-void on_pio_patch_irq() {
-    // Check if PIO0 generated interrupt 0
-    if (pio_interrupt_get(pio0, 0)) {
-        patch_stage++; 
-        pio_interrupt_clear(pio0, 0);
+void BIOS_Patch(void) {
+    // If monitoring was not started by function_x, exit immediately
+    if (!monitoring_active) {
+        return;
     }
-}
 
-void Bios_Patching(void) {
-    // --- 1. HARDWARE BYPASS CHECK ---
-    #if defined(PATCH_SWITCHE)
-        gpio_pull_up(PIN_SWITCH);
-        sleep_us(10);
-        if (gpio_get(PIN_SWITCH) == 0) return; 
-    #endif
+    absolute_time_t now = get_absolute_time();
 
-    uint8_t current_confirms = 0;
-    patch_stage = 0; // Reset sync flag for IRQ
+    // Step 2: Check if the 1.5s global window has expired
+    if (absolute_time_diff_us(now, global_window_end) <= 0) {
+        monitoring_active = false;
+        return;
+    }
 
-    // --- 2. PHASE 1: STABILIZATION & ALIGNMENT (AX) ---
-    // Establish a deterministic hardware timing reference.
-    if (gpio_get(PIN_AX) != 0) {
-        while (gpio_get(PIN_AX) != 0); // Wait for AX Falling
-        while (gpio_get(PIN_AX) == 0); // Wait for AX Rising
+    int current_state = gpio_get(PIN_CE);
+
+    if (current_state != last_known_state) {
+        // Pin A changed: reset the 0.5s inactivity timer
+        last_known_state = current_state;
+        inactivity_start = now;
     } else {
-        while (gpio_get(PIN_AX) == 0); // Wait for AX Rising
-    }
+        // Pin A is stable. Check if it has been stable for 0.5s (500,000 us)
+        if (absolute_time_diff_us(inactivity_start, now) >= 500000) {
+            
+            // CONDITION MET: Immediately stop the background non-blocking phase
+            monitoring_active = false;
 
-    // --- 3. PHASE 2: SILENCE DETECTION ---
-    // Validate the boot stage by identifying the required silence windows.
-    SetLEDDynamic(LED_RED, 100); 
-    while (current_confirms < CONFIRM_COUNTER_TARGET) {
-        uint32_t count = SILENCE_THRESHOLD; 
-        while (count > 0) {
-            if (gpio_get(PIN_AX) != 0) {
-                while (gpio_get(PIN_AX) != 0); // Reset on activity
-                break; 
-            }
-            count--;
-        }
-        if (count == 0) current_confirms++; // One silence window validated
-    }
+            // ------------------------------------------------------------------------
+            // Step 3: High-priority (Blocking) wait for the NEXT state change with 0.5s Time-out
+            // ------------------------------------------------------------------------
+            int wait_state = gpio_get(PIN_CE);
+            absolute_time_t wait_start = get_absolute_time();
+            bool change_detected = false;
 
-    // --- 4. PHASE 3: AX INJECTION (HAND OVER TO PIO) ---
-    // Initialize PIO for AX monitoring and DX injection
-    bios_patch_program_init(pio0, smPATCH, offsetPATCH, PIN_DX, PIN_AX);
-    
-    // Load parameters (Pulse count, timing offset, override duration)
-    pio_sm_put_blocking(pio0, smPATCH, PULSE_COUNT); 
-    pio_sm_put_blocking(pio0, smPATCH, BIT_OFFSET);
-    pio_sm_put_blocking(pio0, smPATCH, OVERRIDE);
-
-    // Busy-wait for PIO IRQ (Phase 3 completion)
-    while (patch_stage < 1) tight_loop_contents();
-
-    // --- 5. PHASE 4 & 5: SECONDARY PATCHING SEQUENCE ---
-    #ifdef PHASE_TWO_PATCH
-        current_confirms = 0;
-
-        // Monitor for the specific silent gap before the second patch window
-        while (current_confirms < CONFIRM_COUNTER_TARGET_2) {
-            uint32_t count = SILENCE_THRESHOLD;
-            while (count > 0) {
-                if (gpio_get(PIN_AX) != 0) { // Still monitoring AX for silence
-                    while (gpio_get(PIN_AX) != 0);
-                    break;
+            while (true) {
+                // Success condition: Pin A finally toggled
+                if (gpio_get(PIN_CE) != wait_state) {
+                    change_detected = true;
+                    break; 
                 }
-                count--;
+
+                // Failure condition: 0.5s timeout reached without any state change
+                if (absolute_time_diff_us(wait_start, get_absolute_time()) >= 500000) {
+                    break; 
+                }
+
+                tight_loop_contents(); // Maintains maximum polling speed on the CPU core
             }
-            if (count == 0) current_confirms++;
+
+            // ------------------------------------------------------------------------
+            // Step 4: High-priority (Blocking) action if the state change occurred
+            // ------------------------------------------------------------------------
+            if (change_detected) {
+                gpio_put(PIN_D2, 0);   // Pull-down active (0V)
+                gpio_pull_down(PIN_D2);
+                sleep_ms(900);        // Strict 0.9s delay
+                
+                gpio_set_dir(PIN_D2, GPIO_IN);
+                gpio_disable_pulls(PIN_D2);
+            }
         }
-
-        // --- PHASE 5: AY INJECTION ---
-        SetLEDDynamic(LED_ORANGE, 100);
-        
-        // Switch PIO source from AX to AY
-        // Ajoute offsetPATCH comme 3ème argument
-        bios_patch_switch_source(pio0, smPATCH, offsetPATCH, PIN_AY);
-        
-        // Send secondary parameters to PIO
-        pio_sm_put_blocking(pio0, smPATCH, PULSE_COUNT_2);
-        pio_sm_put_blocking(pio0, smPATCH, BIT_OFFSET_2);
-        pio_sm_put_blocking(pio0, smPATCH, OVERRIDE_2);
-
-        // Wait for final completion
-        while (patch_stage < 2) tight_loop_contents();
-    #endif
+    }
 }
-
-
-#endif
 
 /*******************************************************************************************************************
  * FUNCTION    : BoardDetection
@@ -365,13 +301,13 @@ void Bios_Patching(void) {
  *
  *******************************************************************************************************************/
 
-void BoardDetection(void) {
+__attribute__((optimize("O3"))) void BoardDetection(void) {
     wfck_mode = 0;                    // Default: Mode 0 (Legacy/GATE)
     uint8_t pulse_hits = 25;          // Required oscillations to confirm Mode 1 (Frequency)
-    uint32_t detectionWindow = 1000000; 
+    uint32_t detectionWindow = 250000; 
 
     #if !defined(BIOS_PATCH)
-        printf("Sleep 300ms...\n");
+        //printf("Sleep 300ms...\n");
         sleep_ms(300);          
     #endif 
     
@@ -417,7 +353,7 @@ void BoardDetection(void) {
 PIO pioSUBQ = pio0;         // Instance PIO (pio0 ou pio1)
 uint smSUBQ = 0;            // Index de la State Machine (0 à 3)
 uint offsetSUBQ;            // Offset du programme dans la mémoire PIO
-void CaptureSUBQ(void) {
+__attribute__((optimize("O3"))) void CaptureSUBQ(void) {
     uint32_t now = time_us_32(); 
 
     // --- STEP 1: TIMEOUT VALIDATION ---
@@ -535,7 +471,7 @@ void CaptureSUBQ(void) {
  *                    to open the injection window, while corrupted frames or out-of-bounds 
  *                    seeking steps it down to filter line glitches and motor noise.
  ******************************************************************************************/
-void FilterSUBQSamples(void) {
+__attribute__((optimize("O3"))) void FilterSUBQSamples(void) {
     // BARRIÈRE : Empêche le traitement répétitif sur la même trame
     if (!subq_new_frame_ready) return;
     subq_new_frame_ready = false; 
@@ -671,15 +607,38 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
         }
         busy_wait_us_32(BIT_DELAY); 
       }
+      
 
-      if(injectSCEx == 3 && bitPosition >= 43 ){
-        gpio_put(PIN_DATA, 0);
+
+    }
+    if(injectSCEx == 3){
           sleep_ms(90);
       }
-    }
-
     if (injectSCEx != 3) {
+        //gpio_set_dir(PIN_DATA, GPIO_IN); 
+        //gpio_disable_pulls(PIN_DATA);
+
+
+        absolute_time_t now = get_absolute_time();
+        global_window_end = delayed_by_us(now, 1500000); // 1.5s global window
+        inactivity_start = now;
+        last_known_state = gpio_get(PIN_CE);
+        
+        monitoring_active = true;
       break; 
+      
+    }
+        if (regionCycle == 2) {
+      gpio_set_dir(PIN_DATA, GPIO_IN);
+      gpio_disable_pulls(PIN_DATA);
+
+        absolute_time_t now = get_absolute_time();
+        global_window_end = delayed_by_us(now, 1500000); // 1.5s global window
+        inactivity_start = now;
+        last_known_state = gpio_get(PIN_CE);
+    
+        monitoring_active = true;
+      break; // Sortie définitive après les 3 régions
     }
   }
 
@@ -702,6 +661,10 @@ void Init() {
     gpio_init(PIN_WFCK);
     gpio_init(PIN_SQCK);
     gpio_init(PIN_SUBQ);
+    gpio_init(PIN_CE);
+    gpio_init(PIN_D2);
+    gpio_init(PIN_BIOS_A);
+    gpio_init(PIN_BIOS_B);
     gpio_init(PIN_TRIGGER_A);
     gpio_init(PIN_TRIGGER_B);
     gpio_init(PIN_REGION_A);
@@ -712,7 +675,11 @@ void Init() {
     gpio_disable_pulls(PIN_WFCK);
     gpio_disable_pulls(PIN_SQCK);
     gpio_disable_pulls(PIN_SUBQ);
+    gpio_disable_pulls(PIN_CE);
+    gpio_disable_pulls(PIN_D2);
 
+    gpio_pull_down(PIN_BIOS_A);
+    gpio_pull_down(PIN_BIOS_B);
     gpio_pull_down(PIN_TRIGGER_A);
     gpio_pull_down(PIN_TRIGGER_B);
     gpio_pull_down(PIN_REGION_A);
@@ -722,31 +689,16 @@ void Init() {
     gpio_set_dir(PIN_WFCK, GPIO_IN);
     gpio_set_dir(PIN_SQCK, GPIO_IN);
     gpio_set_dir(PIN_SUBQ, GPIO_IN);
+    gpio_set_dir(PIN_CE, GPIO_IN);
+    gpio_set_dir(PIN_D2, GPIO_IN);
+    gpio_set_dir(PIN_BIOS_A, GPIO_IN);
+    gpio_set_dir(PIN_BIOS_B, GPIO_IN);
     gpio_set_dir(PIN_TRIGGER_A, GPIO_IN);
     gpio_set_dir(PIN_TRIGGER_B, GPIO_IN);
     gpio_set_dir(PIN_REGION_A, GPIO_IN);
     gpio_set_dir(PIN_REGION_B, GPIO_IN);
     
-    #ifdef BIOS_PATCH
-        // Hardware Patching Pins setup
-        gpio_init(PIN_AX);
-        gpio_init(PIN_AY);
-        gpio_init(PIN_DX);
-        gpio_disable_pulls(PIN_AX);
-        gpio_disable_pulls(PIN_AY);
-        gpio_disable_pulls(PIN_DX);
 
-        // Load and initialize BIOS Patch PIO program
-        uint offsetPATCH = pio_add_program(pio0, &bios_patch_program);
-        smPATCH = pio_claim_unused_sm(pio0, true);
-        // bios_patch_pio_init would be called here if you have a custom init helper
-        #ifdef PATCH_SWITCHE
-            gpio_init(PIN_SWITCH);
-            gpio_set_dir(PIN_SWITCH, GPIO_IN);
-            gpio_pull_up(PIN_SWITCH);
-            
-        #endif
-    #endif
 
     // 3. PIO Program Loading for SUBQ Capture
    offsetSUBQ = pio_add_program(pioSUBQ, &subq_capture_program);
@@ -862,6 +814,8 @@ int main() {
             request_counter = (REQUEST_INJECT_TRIGGER - REQUEST_INJECT_GAP);
             SetLEDDynamic(LED_GREEN, request_counter * 7);
         }
+
+        BIOS_Patch();
     }
     return 0;
 

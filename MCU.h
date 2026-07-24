@@ -14,7 +14,11 @@
 #define PIN_DATA                    3 
 #define PIN_SUBQ                    4 
 #define PIN_SQCK                    5   
+#define PIN_CE                      6 
+#define PIN_D2                      7 
 
+#define PIN_BIOS_A                  14
+#define PIN_BIOS_B                  15
 #define PIN_TRIGGER_A               26
 #define PIN_TRIGGER_B               27
 #define PIN_REGION_A                28
