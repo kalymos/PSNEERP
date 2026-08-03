@@ -258,7 +258,7 @@ void BIOS_Patch(void) {
             if (change_detected) {
                 gpio_put(PIN_D2, 0);   // Pull-down active (0V)
                 gpio_pull_down(PIN_D2);
-                sleep_ms(900);        // Strict 0.9s delay
+                sleep_us(900);        // Strict 900Us delay
                 
                 gpio_set_dir(PIN_D2, GPIO_IN);
                 gpio_disable_pulls(PIN_D2);
@@ -332,6 +332,9 @@ __attribute__((optimize("O3"))) void BoardDetection(void) {
         }
     }
     
+    //if (wfck_mode == 0) {
+    //    gpio_put(PIN_WFCK, 1);
+    //}
 
     #if defined(DEBUG_SERIAL_MONITOR)
         BoardDetectionLog(detectionWindow, wfck_mode, INJECT_SCEx);
@@ -600,6 +603,8 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
       
       else {
         /* METHOD 2: TIME REFERENCE (FIXED DELAY) */
+        gpio_set_dir(PIN_WFCK, GPIO_OUT);
+        gpio_put(PIN_WFCK, 1);
         if (currentBit == 0) {
           gpio_put(PIN_DATA, 0);
         } else {
@@ -613,14 +618,18 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
     }
     if(injectSCEx == 3){
           sleep_ms(90);
+          gpio_put(PIN_DATA, 0);
+          //gpio_set_dir(PIN_WFCK, GPIO_IN);
+          //gpio_disable_pulls(PIN_WFCK);
       }
     if (injectSCEx != 3) {
         //gpio_set_dir(PIN_DATA, GPIO_IN); 
         //gpio_disable_pulls(PIN_DATA);
-
+        gpio_set_dir(PIN_WFCK, GPIO_IN);
+        gpio_disable_pulls(PIN_WFCK);
 
         absolute_time_t now = get_absolute_time();
-        global_window_end = delayed_by_us(now, 1500000); // 1.5s global window
+        global_window_end = delayed_by_us(now, 1800000); // 1.5s global window
         inactivity_start = now;
         last_known_state = gpio_get(PIN_CE);
         
@@ -628,12 +637,15 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
       break; 
       
     }
-        if (regionCycle == 2) {
-      gpio_set_dir(PIN_DATA, GPIO_IN);
-      gpio_disable_pulls(PIN_DATA);
+
+    if (regionCycle == 2) {
+        gpio_set_dir(PIN_DATA, GPIO_IN);
+        gpio_disable_pulls(PIN_DATA);
+        gpio_set_dir(PIN_WFCK, GPIO_IN);
+        gpio_disable_pulls(PIN_WFCK);
 
         absolute_time_t now = get_absolute_time();
-        global_window_end = delayed_by_us(now, 1500000); // 1.5s global window
+        global_window_end = delayed_by_us(now, 1800000); // 1.5s global window
         inactivity_start = now;
         last_known_state = gpio_get(PIN_CE);
     
