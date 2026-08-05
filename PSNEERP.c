@@ -128,15 +128,21 @@ uint sm = 0;
 
 //--- bois patch variables ---
 static bool monitoring_active = false;
-static absolute_time_t global_window_end;
-static absolute_time_t inactivity_start;
+static uint64_t global_window_end_us = 0; // Entier 64-bit natif
+static uint64_t inactivity_start_us = 0;  // Entier 64-bit natif
 static int last_known_state = -1;
+
+// --- Variables globales de mode post-compilation ---
+volatile uint8_t BIOS_PATCH_MODE = 0; // 0=Désactivé, 1=Patch standard, 2=SCPH-5903, 3=Réserve
+volatile bool scph_5903_active = false; // Flag spécifique pour la logique Video-CD
+
 
 // --- CONFIGURATION DU SIGNAL HORLOGE ---
 volatile uint8_t wfck_mode = 0; // 0 = Standard / Détection automatique
 
 // Variables de contrôle d'injection d'origine
 volatile uint32_t request_counter = 0;
+extern volatile bool scph_5903_active;
 
 #if !CONFIG_MODE_STATIC
 volatile uint32_t INJECT_SCEx = 3;
@@ -204,68 +210,66 @@ void SetLEDDynamic(uint32_t color, uint8_t intensity) {
 
  **************************************************************************************/
 void BIOS_Patch(void) {
-    // If monitoring was not started by function_x, exit immediately
-    if (!monitoring_active) {
-        return;
-    }
+    if (!monitoring_active) return;
 
-    absolute_time_t now = get_absolute_time();
+    uint64_t now = to_us_since_boot(get_absolute_time());
 
-    // Step 2: Check if the 1.5s global window has expired
-    if (absolute_time_diff_us(now, global_window_end) <= 0) {
+    // Étape 1 : Fin de la fenêtre globale (Passée à 3.0s dans Perform... pour couvrir vos 2.5s max)
+    if (now >= global_window_end_us) {
         monitoring_active = false;
         return;
     }
 
-    int current_state = gpio_get(PIN_CE);
+    // Étape 2 : Surveillance de l'inactivité sur PIN_D2
+    int current_state = gpio_get(PIN_D2);
 
     if (current_state != last_known_state) {
-        // Pin A changed: reset the 0.5s inactivity timer
         last_known_state = current_state;
-        inactivity_start = now;
+        inactivity_start_us = now; 
     } else {
-        // Pin A is stable. Check if it has been stable for 0.5s (500,000 us)
-        if (absolute_time_diff_us(inactivity_start, now) >= 500000) {
+        // Seuil à 500ms validé par vos 580ms mini de calme mesurées
+        if ((now - inactivity_start_us) >= 500000) {
             
-            // CONDITION MET: Immediately stop the background non-blocking phase
             monitoring_active = false;
 
             // ------------------------------------------------------------------------
-            // Step 3: High-priority (Blocking) wait for the NEXT state change with 0.5s Time-out
+            // Étape 3 : Attente bloquante HAUTE PRIORITÉ du prochain front sur PIN_CE
             // ------------------------------------------------------------------------
-            int wait_state = gpio_get(PIN_CE);
-            absolute_time_t wait_start = get_absolute_time();
+            int wait_state = gpio_get(PIN_CE); 
+            uint64_t wait_start = to_us_since_boot(get_absolute_time());
             bool change_detected = false;
 
             while (true) {
-                // Success condition: Pin A finally toggled
-                if (gpio_get(PIN_CE) != wait_state) {
+                if (gpio_get(PIN_CE) != wait_state) { 
                     change_detected = true;
                     break; 
                 }
 
-                // Failure condition: 0.5s timeout reached without any state change
-                if (absolute_time_diff_us(wait_start, get_absolute_time()) >= 500000) {
+                // Timeout de sécurité si CE reste muet
+                if ((to_us_since_boot(get_absolute_time()) - wait_start) >= 500000) {
                     break; 
                 }
 
-                tight_loop_contents(); // Maintains maximum polling speed on the CPU core
+                tight_loop_contents(); 
             }
 
             // ------------------------------------------------------------------------
-            // Step 4: High-priority (Blocking) action if the state change occurred
+            // Étape 4 : Action bloquante HAUTE PRIORITÉ -> Impulsion de 0V sur PIN_D2
             // ------------------------------------------------------------------------
             if (change_detected) {
-                gpio_put(PIN_D2, 0);   // Pull-down active (0V)
-                gpio_pull_down(PIN_D2);
-                sleep_us(900);        // Strict 900Us delay
+                gpio_put(PIN_D2, 0);   
+                gpio_set_dir(PIN_D2, GPIO_OUT); // Court-circuit franc à la masse (0 Ω)
                 
-                gpio_set_dir(PIN_D2, GPIO_IN);
+                busy_wait_us(900); // Maintien strict de vos 900 µs à l'oscilloscope
+                
+                gpio_set_dir(PIN_D2, GPIO_IN); // Libération immédiate (Haute impédance)
                 gpio_disable_pulls(PIN_D2);
             }
         }
     }
 }
+
+
 
 /*******************************************************************************************************************
  * FUNCTION    : BoardDetection
@@ -499,20 +503,16 @@ __attribute__((optimize("O3"))) void FilterSUBQSamples(void) {
             // INDEX >= A0
             if ((reg0 & 0x00FF0000) >= 0x00A00000) {
                 
-                // SPÉCIFICITÉ SCPH-5903 (VCD GATING)
-                #ifdef SCPH_5903
-                // Si MIN (bits 24-31) vaut 0x02, c'est un flux VCD, on applique le decay (on passe outre)
-                if ((reg0 & 0xFF000000) == 0x02000000) {
-                    // Sort du if sans incrémenter le compteur pour déclencher le Decay du STEP 2
+                // SIGNALEMENT : SPÉCIFICITÉ SCPH-5903 GÉRÉE DYNAMIQUEMENT
+                // Justification : Remplace le #ifdef pour s'adapter à la volée selon les pins du PCB
+                if (scph_5903_active && ((reg0 & 0xFF000000) == 0x02000000)) {
+                    // C'est un flux VCD détecté sur une machine VCD.
+                    // On ne fait rien ici pour sauter l'incrémentation et laisser le STEP 2 diminuer le compteur (Decay).
                 } else {
+                    // Modèles standards OU disque de jeu standard sur 5903
                     request_counter++;
                     return;
                 }
-                #else
-                // Modèles standards : incrémentation directe et immédiate
-                request_counter++;
-                return;
-                #endif
             }
             
             // INDEX == 01 ET calcul wrap-around d'origine strict sur 32 bits
@@ -628,12 +628,14 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
         gpio_set_dir(PIN_WFCK, GPIO_IN);
         gpio_disable_pulls(PIN_WFCK);
 
-        absolute_time_t now = get_absolute_time();
-        global_window_end = delayed_by_us(now, 1800000); // 1.5s global window
-        inactivity_start = now;
-        last_known_state = gpio_get(PIN_CE);
-        
-        monitoring_active = true;
+            if (BIOS_PATCH_MODE == 1 || BIOS_PATCH_MODE == 2) {
+                uint64_t now = to_us_since_boot(get_absolute_time());
+                global_window_end_us = now + 2800000; // Fenêtre de 3.0s validée par vos mesures
+                inactivity_start_us = now;
+                last_known_state = gpio_get(PIN_D2);
+                
+                monitoring_active = true;
+            }
       break; 
       
     }
@@ -644,12 +646,14 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
         gpio_set_dir(PIN_WFCK, GPIO_IN);
         gpio_disable_pulls(PIN_WFCK);
 
-        absolute_time_t now = get_absolute_time();
-        global_window_end = delayed_by_us(now, 1800000); // 1.5s global window
-        inactivity_start = now;
-        last_known_state = gpio_get(PIN_CE);
-    
-        monitoring_active = true;
+            if (BIOS_PATCH_MODE == 1 || BIOS_PATCH_MODE == 2) {
+                uint64_t now = to_us_since_boot(get_absolute_time());
+                global_window_end_us = now + 2800000; // Fenêtre de 3.0s validée par vos mesures
+                inactivity_start_us = now;
+                last_known_state = gpio_get(PIN_D2);
+                
+                monitoring_active = true;
+            }
       break; // Sortie définitive après les 3 régions
     }
   }
@@ -760,6 +764,30 @@ void Init() {
 
     // 5. Affichage simple de la variable
     printf("REQUEST_INJECT_TRIGGER: %d\n", REQUEST_INJECT_TRIGGER);
+
+    // =========================================================================
+    // CONFIGURATION DYNAMIQUE DU MODE BIOS (Post-compilation)
+    // =========================================================================
+    // 1. Lecture des états matériels des broches BIOS
+    uint32_t BIOS_val_B = gpio_get(PIN_BIOS_B);
+    uint32_t BIOS_val_A = gpio_get(PIN_BIOS_A);
+
+    // 2. Alignement binaire (B = bit 1, A = bit 0)
+    uint32_t BIOS_index_BA = (BIOS_val_B << 1) | BIOS_val_A;
+
+    // 3. Assignation directe à la variable globale (00=0, 01=1, 10=2, 11=3)
+    BIOS_PATCH_MODE = BIOS_index_BA;
+
+    // 4. Traitement des cas spécifiques (YAGNI : Logique immédiate)
+    if (BIOS_PATCH_MODE == 2) {
+        scph_5903_active = true;
+        // Optionnel : Vous pouvez ajuster ici d'autres timings spécifiques à la SCPH-5903 si nécessaire
+    } else {
+        scph_5903_active = false;
+    }
+
+    printf("BIOS_PATCH_MODE configuré sur : %d (SCPH-5903 active: %s)\n", 
+           BIOS_PATCH_MODE, scph_5903_active ? "OUI" : "NON");
     
     #endif
 }
