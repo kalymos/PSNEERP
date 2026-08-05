@@ -210,8 +210,9 @@ void SetLEDDynamic(uint32_t color, uint8_t intensity) {
 
  **************************************************************************************/
 void BIOS_Patch(void) {
-    if (!monitoring_active) return;
 
+    if (!monitoring_active) return;
+    
     uint64_t now = to_us_since_boot(get_absolute_time());
 
     // Étape 1 : Fin de la fenêtre globale (Passée à 3.0s dans Perform... pour couvrir vos 2.5s max)
@@ -220,6 +221,7 @@ void BIOS_Patch(void) {
         return;
     }
 
+    SetLEDDynamic(LED_OFF, 0);
     // Étape 2 : Surveillance de l'inactivité sur PIN_D2
     int current_state = gpio_get(PIN_D2);
 
@@ -227,9 +229,9 @@ void BIOS_Patch(void) {
         last_known_state = current_state;
         inactivity_start_us = now; 
     } else {
-        // Seuil à 500ms validé par vos 580ms mini de calme mesurées
-        if ((now - inactivity_start_us) >= 500000) {
-            
+        // Seuil à 500ms validé par vos 550ms mini de calme mesurées
+        if ((now - inactivity_start_us) >= 550000) {
+            printf("b\n");
             monitoring_active = false;
 
             // ------------------------------------------------------------------------
@@ -264,6 +266,8 @@ void BIOS_Patch(void) {
                 
                 gpio_set_dir(PIN_D2, GPIO_IN); // Libération immédiate (Haute impédance)
                 gpio_disable_pulls(PIN_D2);
+
+                SetLEDDynamic(LED_PURPLE, 100);
             }
         }
     }
@@ -855,7 +859,9 @@ int main() {
             SetLEDDynamic(LED_GREEN, request_counter * 7);
         }
 
-        BIOS_Patch();
+        if (BIOS_PATCH_MODE == 1){
+         BIOS_Patch();
+        }
     }
     return 0;
 
