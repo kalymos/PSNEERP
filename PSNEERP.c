@@ -100,6 +100,8 @@
 #include "hardware/uart.h" 
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
+#include "hardware/irq.h" 
+
 
 uint offsetPATCH;  
 
@@ -128,9 +130,9 @@ uint sm = 0;
 
 //--- bois patch variables ---
 static bool monitoring_active = false;
-static uint64_t global_window_end_us = 0; // Entier 64-bit natif
-static uint64_t inactivity_start_us = 0;  // Entier 64-bit natif
-static int last_known_state = -1;
+static uint64_t global_window_end_us = 0; 
+static uint64_t inactivity_start_us = 0;  
+static int last_known_state_D2 = 0;
 
 // --- Variables globales de mode post-compilation ---
 volatile uint8_t BIOS_PATCH_MODE = 0; // 0=Désactivé, 1=Patch standard, 2=SCPH-5903, 3=Réserve
@@ -209,29 +211,49 @@ void SetLEDDynamic(uint32_t color, uint8_t intensity) {
  *
 
  **************************************************************************************/
+
+
+
 void BIOS_Patch(void) {
 
     if (!monitoring_active) return;
     
     uint64_t now = to_us_since_boot(get_absolute_time());
 
-    // Étape 1 : Fin de la fenêtre globale (Passée à 3.0s dans Perform... pour couvrir vos 2.5s max)
+    // Étape 1 : Fin de la fenêtre globale
     if (now >= global_window_end_us) {
         monitoring_active = false;
         return;
     }
+    
+    SetLEDDynamic(LED_WHITE, 200);
 
-    SetLEDDynamic(LED_OFF, 0);
-    // Étape 2 : Surveillance de l'inactivité sur PIN_D2
-    int current_state = gpio_get(PIN_D2);
+    // ============================================================================
+    // Étape 2 : ÉCHANTILLONNAGE ULTRA-RAPIDE ANTI-STROBOSCOPIQUE (CONTOURNE LE PWM 99%)
+    // ============================================================================
+    bool activite_detectee = false;
+    int state_initial = gpio_get(PIN_D2);
+    
+    // On observe la broche de manière intensive pendant 40 microsecondes.
+    // Si le PWM de 30 µs passe pendant ce laps de temps, on le capture à coup sûr.
+    uint64_t start_sample = to_us_since_boot(get_absolute_time());
+    while ((to_us_since_boot(get_absolute_time()) - start_sample) < 40) {
+        if (gpio_get(PIN_D2) != state_initial) {
+            activite_detectee = true;
+            break; 
+        }
+        tight_loop_contents();
+    }
 
-    if (current_state != last_known_state) {
-        last_known_state = current_state;
-        inactivity_start_us = now; 
-    } else {
-        // Seuil à 500ms validé par vos 550ms mini de calme mesurées
+    // Gestion du chronomètre basée sur l'observation intensive
+    if (activite_detectee) {
+        last_known_state_D2 = gpio_get(PIN_D2);
+        inactivity_start_us = now; // Reset du chrono : il y a de l'activité réelle !
+    } 
+    else {
+        // Seuil à 550ms validé si le signal est resté totalement plat
         if ((now - inactivity_start_us) >= 550000) {
-            printf("b\n");
+            printf("a-----\n");
             monitoring_active = false;
 
             // ------------------------------------------------------------------------
@@ -240,11 +262,11 @@ void BIOS_Patch(void) {
             int wait_state = gpio_get(PIN_CE); 
             uint64_t wait_start = to_us_since_boot(get_absolute_time());
             bool change_detected = false;
-
+            
             while (true) {
                 if (gpio_get(PIN_CE) != wait_state) { 
                     change_detected = true;
-                    break; 
+                    break; // Synchronisation immédiate et chirurgicale au premier front
                 }
 
                 // Timeout de sécurité si CE reste muet
@@ -267,11 +289,12 @@ void BIOS_Patch(void) {
                 gpio_set_dir(PIN_D2, GPIO_IN); // Libération immédiate (Haute impédance)
                 gpio_disable_pulls(PIN_D2);
 
-                SetLEDDynamic(LED_PURPLE, 100);
+                printf("b-----\n");
             }
         }
     }
 }
+
 
 
 
@@ -568,7 +591,6 @@ __attribute__((optimize("O3"))) void FilterSUBQSamples(void) {
 
 void PerformInjectionSequence(uint8_t injectSCEx) {
   // OPTIMISATION : Tableau aligné sur la largeur native des registres ARM 32-bit
-  // Mot 0 = bits 0-31 (octets 0, 1, 2, 3 packés) | Mot 1 = bits 32-43 (octets 4, 5 packés)
   static const uint32_t allRegionsSCEx[3][2] = {
       { 0x5D4BC959, 0x000002DA }, // SCEI (Jap)
       { 0x5D4BC959, 0x000002FA }, // SCEA (USA)
@@ -576,7 +598,6 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
   };
 
   const uint32_t BIT_DELAY = 4000;
-
 
   for (uint32_t regionCycle = 0; regionCycle < 3; regionCycle++) {
     uint32_t regionIndex = (injectSCEx == 3) ? regionCycle : (uint32_t)injectSCEx;
@@ -587,12 +608,11 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
 
     for (uint32_t bitPosition = 0; bitPosition < 44; bitPosition++) {
       // Extraction ultra-rapide sans aucune division, reste 100% synchrone
-      // Si bitPosition < 32 (0 à 31), on lit w0. Sinon (32 à 43), on lit w1.
       uint32_t currentBit = (bitPosition < 32) ? ((w0 >> bitPosition) & 0x01) 
                                                : ((w1 >> (bitPosition - 32)) & 0x01);
 
       if (wfck_mode) {
-        /* METHOD 1: PULSE COUNTING (WFCK SYNC) -  */
+        /* METHOD 1: PULSE COUNTING (WFCK SYNC) */
         for (uint32_t count = 30; count > 0; count--) {
           while (gpio_get(PIN_WFCK));
           gpio_put(PIN_DATA, 0); 
@@ -603,8 +623,6 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
           }
         }
       } 
-
-      
       else {
         /* METHOD 2: TIME REFERENCE (FIXED DELAY) */
         gpio_set_dir(PIN_WFCK, GPIO_OUT);
@@ -616,32 +634,29 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
         }
         busy_wait_us_32(BIT_DELAY); 
       }
-      
-
-
     }
-    if(injectSCEx == 3){
-          sleep_ms(90);
-          gpio_put(PIN_DATA, 0);
-          //gpio_set_dir(PIN_WFCK, GPIO_IN);
-          //gpio_disable_pulls(PIN_WFCK);
-      }
+
+    if (injectSCEx == 3) {
+        sleep_ms(90);
+        gpio_put(PIN_DATA, 0);
+    }
+
     if (injectSCEx != 3) {
-        //gpio_set_dir(PIN_DATA, GPIO_IN); 
-        //gpio_disable_pulls(PIN_DATA);
         gpio_set_dir(PIN_WFCK, GPIO_IN);
         gpio_disable_pulls(PIN_WFCK);
 
-            if (BIOS_PATCH_MODE == 1 || BIOS_PATCH_MODE == 2) {
-                uint64_t now = to_us_since_boot(get_absolute_time());
-                global_window_end_us = now + 2800000; // Fenêtre de 3.0s validée par vos mesures
-                inactivity_start_us = now;
-                last_known_state = gpio_get(PIN_D2);
-                
-                monitoring_active = true;
-            }
-      break; 
-      
+        // Stabilisation électrique de la ligne après forçage
+        busy_wait_us_32(20); 
+
+        if (BIOS_PATCH_MODE == 1) {
+            uint64_t now = to_us_since_boot(get_absolute_time());
+            global_window_end_us = now + 2800000; 
+            inactivity_start_us = now;
+            last_known_state_D2 = gpio_get(PIN_D2);
+            
+            monitoring_active = true;
+        }
+        break; 
     }
 
     if (regionCycle == 2) {
@@ -650,15 +665,18 @@ void PerformInjectionSequence(uint8_t injectSCEx) {
         gpio_set_dir(PIN_WFCK, GPIO_IN);
         gpio_disable_pulls(PIN_WFCK);
 
-            if (BIOS_PATCH_MODE == 1 || BIOS_PATCH_MODE == 2) {
-                uint64_t now = to_us_since_boot(get_absolute_time());
-                global_window_end_us = now + 2800000; // Fenêtre de 3.0s validée par vos mesures
-                inactivity_start_us = now;
-                last_known_state = gpio_get(PIN_D2);
-                
-                monitoring_active = true;
-            }
-      break; // Sortie définitive après les 3 régions
+        // Stabilisation électrique de la ligne après forçage
+        busy_wait_us_32(20); 
+
+        if (BIOS_PATCH_MODE == 1) {
+            uint64_t now = to_us_since_boot(get_absolute_time());
+            global_window_end_us = now + 2800000; 
+            inactivity_start_us = now;
+            last_known_state_D2 = gpio_get(PIN_D2);
+            
+            monitoring_active = true;
+        }
+        break; 
     }
   }
 
@@ -860,6 +878,7 @@ int main() {
         }
 
         if (BIOS_PATCH_MODE == 1){
+
          BIOS_Patch();
         }
     }
